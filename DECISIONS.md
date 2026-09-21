@@ -23,23 +23,43 @@ field during the exposure. It is a filter, not a discriminator.
 ## 2. Require visible stars, and refuse to guess pointing
 
 Plate solving against a star catalogue is what makes the geometry trustworthy. An
-image with a streak and no stars yields no pointing, and a pointing guessed from
+image with a trail and no stars yields no pointing, and a pointing guessed from
 compass or orientation EXIF would be wrong by degrees.
 
 A wrong-but-plausible answer is worse than no answer here, because the user has no
 way to tell the two apart. Such an image returns `no_pointing`.
 
-## 3. Three distinct negative outcomes, not one
+## 3. The tool volunteers findings, so silence must be cheaper than a guess
 
-`no_pointing`, `no_streak` and `no_match` are separate statuses. Collapsing them
-would hide the failure most likely to occur in practice — not being able to solve
-the image — behind the one users would assume, namely that no satellite matched.
+SatStreak is not told where to look. It sweeps a photograph and reports what it
+finds, which may be nothing, or may be several trails the photographer never
+noticed. Two consequences follow, and both shape the data model.
 
-An `ambiguous` status exists for the same reason: several satellites fitting
-equally well is a real result, and reporting whichever sorted first would
-manufacture confidence that was never earned.
+**One image yields zero or more independent findings.** A single ranked candidate
+list would encode the assumption that the user had already spotted one streak and
+wanted it named. `IdentifyResult` therefore holds a tuple of `Finding`s, each
+wrapping one `Streak` with its own candidates and its own outcome.
 
-## 4. `predict` answers a different question from `identify`, and says so
+**Precision matters more than recall.** When a caller points at a streak, a wrong
+name is a wrong answer they can at least suspect. When the tool volunteers a
+finding, the caller has no independent way to tell a real trail from an aircraft,
+a meteor, a cosmic ray hit, a hot pixel, a power line or lens flare. A confident
+false positive is therefore far more damaging than a miss, and the invariants are
+written to make silence the cheaper failure:
+
+- `FindingStatus.UNIDENTIFIED` must carry no candidates at all, so a weak match
+  cannot be presented as a hedge the user might read as the answer.
+- `FindingStatus.MATCH` requires a single clear leader; a tie is `AMBIGUOUS`.
+- `ImageStatus.NO_POINTING` stays distinct from `NO_STREAKS`. Collapsing them
+  would hide "could not tell where the camera pointed" — the failure most likely
+  in practice — behind "no satellites in your photo", which a user would readily
+  believe and never question.
+
+`Streak` carries only pixel geometry and a detection score, with no interpretation.
+Keeping the measurement separate from its identification is what allows the
+detector to be evaluated on its own, which decision 9 requires.
+
+## 4. `predict` answers a different question from `scan`, and says so
 
 Plate-solving an image and listing every satellite that crossed its field is
 cheap: the matcher computes it internally to have candidates to score, so exposing
@@ -116,3 +136,23 @@ in a later commit stays reachable in the git objects and in every fork and clone
 
 Code that needs a credential reads it from the environment and fails loudly when it
 is absent, rather than carrying a fallback that could be committed by accident.
+
+## 9. Milestone 6 reports two numbers, not one
+
+"Accuracy" is ambiguous for a tool that finds its own subjects. Two separate
+quantities are reported:
+
+- **Detection precision and recall** — of the trails reported, how many were real,
+  and of the real trails present, how many were found.
+- **Match accuracy** — of the trails correctly detected, how many were named
+  correctly.
+
+They must not be combined. A tool that names detected trails correctly 95% of the
+time but hallucinates a trail in one photograph out of five is not usable, and a
+single blended figure would conceal exactly that. Reporting them separately also
+makes the precision-over-recall preference in decision 3 measurable rather than
+merely asserted.
+
+This follows from the framing rather than from taste: an evaluation designed for
+"name this streak I found" measures only the second number, and would have scored
+the tool well while it was quietly inventing findings.
