@@ -14,6 +14,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A leaked credential must be caught by a machine, not by anyone remembering.
+  # Scans the full history, not just the tip, because a secret removed in a later
+  # commit stays reachable in the objects and in every fork and clone.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   lint:
     runs-on: ubuntu-latest
     steps:

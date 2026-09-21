@@ -156,6 +156,9 @@ class CorpusItem:
     local_path: str | None = None
     solved: bool | None = None
     seconds: float | None = None
+    """Wall seconds from the start of the batch to this job's verdict, not the
+    solver's own runtime. Jobs are submitted together and queued, so this is a
+    throughput figure, not a per-image cost."""
     ra_deg: float | None = None
     dec_deg: float | None = None
     field_radius_deg: float | None = None
@@ -354,27 +357,80 @@ def download(session: requests.Session, item: CorpusItem, into: Path) -> bool:
     return True
 
 
-def solve(nova: Nova, item: CorpusItem, budget_s: float) -> None:
+def submit_all(nova: Nova, items: list[CorpusItem], pause_s: float = 1.0) -> dict[int, int]:
+    """Submit every downloaded image up front. Returns {item index: submission id}."""
+    pending: dict[int, int] = {}
+    for index, item in enumerate(items):
+        if not item.local_path:
+            continue
+        try:
+            blob = Path(item.local_path).read_bytes()
+            pending[index] = nova.submit(
+                Path(item.local_path).name, blob, item.exif.estimated_fov_width_deg
+            )
+        except Exception as exc:  # noqa: BLE001 - a spike records failures, it does not raise
+            item.solved = False
+            item.error = f"submit failed: {type(exc).__name__}: {exc}"
+        time.sleep(pause_s)  # do not hammer the queue
+    return pending
+
+
+def collect_all(
+    nova: Nova,
+    items: list[CorpusItem],
+    pending: dict[int, int],
+    budget_s: float,
+    poll_s: float = 10.0,
+) -> None:
+    """Poll the whole submitted set until every job resolves or the budget runs out."""
     started = time.monotonic()
-    try:
-        blob = Path(item.local_path or "").read_bytes()
-        subid = nova.submit(
-            Path(item.local_path or "x").name, blob, item.exif.estimated_fov_width_deg
-        )
-        solved, job_id = nova.wait(subid, budget_s)
-        item.solved = solved
-        item.seconds = round(time.monotonic() - started, 1)
-        if job_id is not None:
-            item.job_url = f"https://nova.astrometry.net/status/{job_id}"
-        if solved and job_id is not None:
-            cal = nova.calibration(job_id)
-            item.ra_deg = cal.get("ra")
-            item.dec_deg = cal.get("dec")
-            item.field_radius_deg = cal.get("radius")
-    except Exception as exc:  # noqa: BLE001 - a spike records failures, it does not raise
-        item.solved = False
-        item.seconds = round(time.monotonic() - started, 1)
-        item.error = f"{type(exc).__name__}: {exc}"
+    deadline = started + budget_s
+    jobs: dict[int, int] = {}
+    total = len(pending)
+
+    while pending and time.monotonic() < deadline:
+        for index in list(pending):
+            item = items[index]
+            try:
+                if index not in jobs:
+                    job_id = nova.job_for(pending[index])
+                    if job_id is None:
+                        continue  # not picked up off the queue yet
+                    jobs[index] = job_id
+                status = nova.job_status(jobs[index])
+            except Exception as exc:  # noqa: BLE001 - record and move on
+                item.solved = False
+                item.error = f"{type(exc).__name__}: {exc}"
+                pending.pop(index)
+                continue
+
+            if status not in ("success", "failure"):
+                continue
+
+            item.solved = status == "success"
+            item.seconds = round(time.monotonic() - started, 1)
+            item.job_url = f"https://nova.astrometry.net/status/{jobs[index]}"
+            if item.solved:
+                try:
+                    cal = nova.calibration(jobs[index])
+                    item.ra_deg = cal.get("ra")
+                    item.dec_deg = cal.get("dec")
+                    item.field_radius_deg = cal.get("radius")
+                except Exception as exc:  # noqa: BLE001 - solved is still solved
+                    item.error = f"calibration unavailable: {type(exc).__name__}: {exc}"
+            pending.pop(index)
+
+            done = total - len(pending)
+            label = item.title.removeprefix("File:")[:44]
+            mark = "SOLVED" if item.solved else "failed"
+            print(f"  [{done}/{total}] {mark:<7} {label:<46} [{item.camera_class}]")
+
+        if pending:
+            time.sleep(poll_s)
+
+    for index in pending:
+        items[index].solved = False
+        items[index].error = f"no verdict within the {budget_s:.0f}s batch budget"
 
 
 def summarise(items: list[CorpusItem]) -> dict[str, Any]:
@@ -389,7 +445,7 @@ def summarise(items: list[CorpusItem]) -> dict[str, Any]:
             "solve_rate_upper_bound": (
                 round(len(solved) / len(attempted), 3) if attempted else None
             ),
-            "median_seconds": times[len(times) // 2] if times else None,
+            "median_seconds_to_verdict": times[len(times) // 2] if times else None,
         }
 
     by_class = {
@@ -437,7 +493,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-query", type=int, default=12, help="results per search term")
     parser.add_argument("--fetch-only", action="store_true", help="gather and download; no solving")
     parser.add_argument("--out", type=Path, default=Path("spike-out/corpus"))
-    parser.add_argument("--budget", type=float, default=300.0, help="seconds to wait per image")
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=900.0,
+        help="seconds to wait for the whole batch (nova solves the queue in parallel)",
+    )
     args = parser.parse_args(argv)
 
     session = requests.Session()
@@ -462,19 +523,21 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         nova = Nova(api_key)
 
-    print(f"\nProcessing {len(items)} image(s)...")
+    print()
+    print(f"Downloading {len(items)} image(s)...")
     images_dir = args.out / "images"
     for index, item in enumerate(items, start=1):
         label = item.title.removeprefix("File:")[:48]
-        print(f"[{index}/{len(items)}] {label:<50} [{item.camera_class}] ", end="", flush=True)
-        if not download(session, item, images_dir):
-            print("download failed")
-            continue
-        if nova is None:
-            print("fetched")
-            continue
-        solve(nova, item, args.budget)
-        print(f"SOLVED {item.seconds}s" if item.solved else f"failed ({item.error or 'no match'})")
+        ok = download(session, item, images_dir)
+        mark = "ok    " if ok else "FAILED"
+        print(f"  [{index}/{len(items)}] {mark} {label:<50} [{item.camera_class}]")
+
+    if nova is not None:
+        print()
+        print("Submitting to nova.astrometry.net...")
+        pending = submit_all(nova, items)
+        print(f"  {len(pending)} submitted; polling (batch budget {args.budget:.0f}s)")
+        collect_all(nova, items, pending, args.budget)
 
     args.out.mkdir(parents=True, exist_ok=True)
     summary = summarise(items)

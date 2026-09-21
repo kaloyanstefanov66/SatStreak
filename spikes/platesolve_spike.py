@@ -233,17 +233,30 @@ class Nova:
             raise RuntimeError(f"upload rejected: {payload}")
         return int(payload["subid"])
 
+    def job_for(self, subid: int) -> int | None:
+        """The job id once the submission has been picked up, otherwise None."""
+        jobs = [j for j in self._get(f"/submissions/{subid}").get("jobs", []) if j]
+        return int(jobs[0]) if jobs else None
+
+    def job_status(self, job_id: int) -> str:
+        """One of ``solving``, ``success`` or ``failure``."""
+        return str(self._get(f"/jobs/{job_id}").get("status") or "unknown")
+
     def wait(self, subid: int, budget_s: float, poll_s: float = 5.0) -> tuple[bool, int | None]:
-        """Block until the submission resolves. Returns (solved, job_id)."""
+        """Block until one submission resolves. Returns (solved, job_id).
+
+        Convenient for a handful of images. For a whole corpus, submit
+        everything first and poll the set: nova solves asynchronously, so
+        waiting on each image in turn serialises work the server would
+        otherwise do in parallel.
+        """
         deadline = time.monotonic() + budget_s
         job_id: int | None = None
         while time.monotonic() < deadline:
             if job_id is None:
-                jobs = [j for j in self._get(f"/submissions/{subid}").get("jobs", []) if j]
-                if jobs:
-                    job_id = int(jobs[0])
+                job_id = self.job_for(subid)
             if job_id is not None:
-                status = self._get(f"/jobs/{job_id}").get("status")
+                status = self.job_status(job_id)
                 if status == "success":
                     return True, job_id
                 if status == "failure":
