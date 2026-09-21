@@ -46,6 +46,7 @@ import math
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -465,6 +466,14 @@ def summarise(items: list[CorpusItem]) -> dict[str, Any]:
         "with_gps": sum(1 for i in items if i.exif.latitude_deg is not None),
         "with_exposure": sum(1 for i in items if i.exif.exposure_s is not None),
         "ground_truth_candidates": sum(1 for i in items if i.names_a_satellite),
+        # The raw model strings, so a thin phone bucket can be told apart from a
+        # classifier that simply does not recognise the phones that are present.
+        "camera_models": dict(
+            sorted(
+                Counter(i.exif.camera or "(none recorded)" for i in items).items(),
+                key=lambda kv: (-kv[1], kv[0]),
+            )
+        ),
     }
 
 
@@ -560,6 +569,10 @@ def main(argv: list[str] | None = None) -> int:
         f"  names a satellite (matcher ground-truth candidates): "
         f"{summary['ground_truth_candidates']}"
     )
+    print()
+    print("  camera models seen:")
+    for model, count in list(summary["camera_models"].items())[:12]:
+        print(f"    {count:>3}x  {model}")
     print(f"\n  {summary['caveat']}")
     print(f"\nWritten to {args.out}")
     return 0
