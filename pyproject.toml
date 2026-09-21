@@ -27,7 +27,7 @@ dependencies = []
 [project.optional-dependencies]
 # Standalone feasibility spikes (spikes/), not part of the library.
 spike = ["pillow>=10.0", "requests>=2.31"]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["pytest>=8.0", "ruff==0.16.4"]
 
 [project.scripts]
 satstreak = "satstreak.cli:main"
