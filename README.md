@@ -65,13 +65,23 @@ being answered first, before the machinery that depends on it is built.
 | 0b | Upper-bound solve rate from public images, by camera class (`spikes/`) | ready to run |
 | 1 | Package skeleton, data model, tests, CI | done |
 | 2 | Orbit data: CelesTrak fetch with caching, propagation | not started |
-| 3 | Geometry: pointing + observer + time window to pixel-space tracks | not started |
+| 3 | Geometry: pointing + observer + time window to pixel-space tracks, plus `satstreak predict` | not started |
 | 4 | Streak detection | not started |
 | 5 | Matcher and calibrated confidence score | not started |
 | 6 | Real photographs: EXIF, plate-solve backend, measured accuracy | not started |
 
 A hosted web demo and a write-up come after milestone 6, and only if the accuracy
 numbers justify them.
+
+`satstreak predict` will list every satellite that crossed a solved image's field
+of view. That is **prediction, not identification** — a phone frame covers about
+16% of the visible sky and can contain a couple of hundred catalogued objects at
+once. It answers what *could* be in the picture, and exists mainly because the
+matcher computes it anyway.
+
+Design decisions and the reasoning behind them are recorded in
+[DECISIONS.md](DECISIONS.md), including why satellites that appear as points
+rather than streaks are out of scope for now.
 
 ## Prior art
 
