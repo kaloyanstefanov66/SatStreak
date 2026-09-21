@@ -1,5 +1,9 @@
 # SatStreak
 
+[![CI](https://github.com/kaloyanstefanov66/SatStreak/actions/workflows/ci.yml/badge.svg)](https://github.com/kaloyanstefanov66/SatStreak/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 Identify which satellite made the streak in your night-sky photograph.
 
 You point a camera at the sky, leave the shutter open, and a bright line crosses
