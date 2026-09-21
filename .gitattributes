@@ -1,0 +1,8 @@
+# Normalise line endings so the Linux and Windows CI jobs see identical files.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tif binary
+*.tiff binary

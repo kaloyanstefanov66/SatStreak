@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local scratch: TLE caches, test photos, spike output
+.cache/
+data/
+photos/
+*.tle
+spike-out/
+
+# Never commit these
+.env
+*.apikey
