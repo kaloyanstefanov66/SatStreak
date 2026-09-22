@@ -12,10 +12,10 @@ something crossed the frame while it was open. You will often not have noticed.
 made each one — by NORAD ID and name, with a confidence score — or tells you
 plainly that it could not work it out.
 
-> **Status: pre-alpha, and not yet useful.** The scaffolding, data model and test
-> suite are in place. Orbit propagation, streak detection and matching are not.
-> The feasibility question below has not been answered yet, and the project does
-> not work until it is. See [Roadmap](#roadmap).
+> **Status: pre-alpha, and not yet useful.** The scaffolding, data model, test
+> suite and orbit propagation are in place. Plate solving, trail detection and
+> matching are not, so `satstreak scan` cannot yet answer anything. The
+> feasibility question below is also still open. See [Roadmap](#roadmap).
 
 ## How it is meant to work
 
@@ -91,8 +91,8 @@ combined figure would hide that.
 `satstreak predict` will list every satellite that crossed a solved image's field
 of view. That is **prediction, not identification** — a phone frame covers about
 16% of the visible sky, and measurement against the live catalogue puts of order
-100 catalogued objects inside one at any moment. It answers what *could* be in the picture, and exists mainly because the
-matcher computes it anyway.
+100 catalogued objects inside one at any moment. It answers what *could* be in
+the picture, and exists mainly because the matcher computes it anyway.
 
 A hosted web demo and a write-up come after milestone 6, and only if the accuracy
 numbers justify them.
