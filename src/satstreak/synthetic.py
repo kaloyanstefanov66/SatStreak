@@ -20,6 +20,7 @@ geometry and matching are right, not to stand in for reality.
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -85,19 +86,40 @@ def _stamp_gaussian(image: np.ndarray, x: float, y: float, amplitude: float, sig
     image[y0:y1, x0:x1] += amplitude * np.exp(-squared / (2.0 * sigma**2))
 
 
-def _draw_trail(
+#: Stamps per pixel along a trail. Dense enough that the ridge is continuous.
+_STAMPS_PER_PIXEL = 2.0
+
+
+def draw_trail(
     image: np.ndarray,
     points: list[tuple[float, float]],
-    brightness: float,
+    peak_brightness: float,
     sigma: float,
 ) -> None:
-    """Draw a trail by walking its path at sub-pixel steps."""
+    """Draw a trail whose ridge peaks at ``peak_brightness`` above the background.
+
+    The normalisation matters more than it looks. A trail is built from Gaussian
+    stamps walked along its path, and those stamps overlap and add: at two stamps
+    per pixel with sigma 1.4, each pixel collects contributions from roughly
+    seventeen of them, so a naive amplitude of 6 produces a ridge peaking near 42.
+    Without this correction the brightness parameter means nothing physical, and
+    any statement about the faintest detectable trail is measuring the wrong
+    quantity.
+
+    The ridge of overlapping Gaussians spaced ``d`` apart peaks at
+    ``A * sqrt(2*pi) * sigma / d``, so the per-stamp amplitude is scaled by the
+    inverse of that.
+    """
+    spacing = 1.0 / _STAMPS_PER_PIXEL
+    accumulation = math.sqrt(2.0 * math.pi) * sigma / spacing
+    amplitude = peak_brightness / accumulation
+
     for (ax, ay), (bx, by) in itertools.pairwise(points):
         span = float(np.hypot(bx - ax, by - ay))
-        steps = max(2, int(span * 2.0))  # two stamps per pixel keeps it continuous
+        steps = max(2, int(span * _STAMPS_PER_PIXEL))
         for i in range(steps + 1):
             t = i / steps
-            _stamp_gaussian(image, ax + (bx - ax) * t, ay + (by - ay) * t, brightness, sigma)
+            _stamp_gaussian(image, ax + (bx - ax) * t, ay + (by - ay) * t, amplitude, sigma)
 
 
 def render_frame(
@@ -122,9 +144,10 @@ def render_frame(
         star_count: Invented stars, scattered uniformly. They exist as distractors
             for the detector, not for plate solving, so their positions carry no
             astronomical meaning.
-        trail_brightness: Amplitude relative to the noise. The default is a
-            comfortably bright trail; lowering it towards `noise_sigma` is how to
-            find where a detector stops working.
+        trail_brightness: Peak brightness of the trail's ridge above the
+            background, in the same units as `noise_sigma`. The default is a
+            comfortably bright trail; lowering it towards `noise_sigma` is how
+            to find where a detector stops working.
 
     Returns:
         The frame, with truth entries for every trail actually drawn.
@@ -151,7 +174,7 @@ def render_frame(
         if len(visible) < 2:
             continue
         points = [(p.x, p.y) for p in visible]
-        _draw_trail(image, points, trail_brightness, trail_sigma)
+        draw_trail(image, points, trail_brightness, trail_sigma)
         truth.append(
             TruthTrail(
                 norad_id=track.norad_id,

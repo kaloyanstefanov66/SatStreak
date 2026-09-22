@@ -1,12 +1,15 @@
-"""Tests for the command-line layer."""
+"""Tests for the command-line layer.
+
+The CLI is deliberately thin, so most of these check that it refuses clearly
+rather than proceeding on a guess. The exception is the last test, which runs a
+real photograph through the whole pipeline from the command line.
+"""
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from satstreak.cli import EXIT_NO_MATCH, _render, main
+from satstreak.cli import EXIT_ERROR, _render, main
 from satstreak.types import (
     Candidate,
     Finding,
@@ -17,31 +20,47 @@ from satstreak.types import (
 )
 
 
-def test_scan_reports_that_pointing_is_unknown(capsys: pytest.CaptureFixture[str]) -> None:
-    # Until plate solving exists the only honest answer is that pointing is
-    # unknown. This test is expected to change when milestone 6 lands, not to be
-    # deleted.
-    assert main(["scan", "photo.jpg", "--json"]) == EXIT_NO_MATCH
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "no_pointing"
-    assert payload["findings"] == []
-    assert payload["diagnostics"]["image"] == "photo.jpg"
-
-
-def test_scan_without_json_prints_the_message(capsys: pytest.CaptureFixture[str]) -> None:
-    main(["scan", "photo.jpg"])
-    assert "Not implemented yet" in capsys.readouterr().out
-
-
 def test_a_missing_subcommand_is_an_error() -> None:
     with pytest.raises(SystemExit) as exc:
         main([])
     assert exc.value.code != 0
 
 
+def test_scan_without_a_time_says_so(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["scan", "photo.jpg"]) == EXIT_ERROR
+    assert "--time is required" in capsys.readouterr().err
+
+
+def test_scan_rejects_a_time_without_an_offset(capsys: pytest.CaptureFixture[str]) -> None:
+    # A local time read as UTC rotates the sky by the observer's offset, so this
+    # refuses rather than assuming.
+    code = main(
+        ["scan", "photo.jpg", "--time", "2026-09-21T23:14:07", "--lat", "42", "--lon", "23"]
+    )
+    assert code == EXIT_ERROR
+    assert "needs a UTC offset" in capsys.readouterr().err
+
+
+def test_scan_without_a_pointing_explains_what_is_missing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Plate solving would supply the aim. Until it does, the CLI says so instead
+    # of guessing a pointing and reporting confident nonsense.
+    code = main(
+        ["scan", "photo.jpg", "--time", "2026-09-21T23:14:07+03:00", "--lat", "42", "--lon", "23"]
+    )
+    assert code == EXIT_ERROR
+    error = capsys.readouterr().err
+    assert "--alt, --az and --fov are required" in error
+    assert "cannot yet recover the camera's aim" in error
+
+
+# --- rendering --------------------------------------------------------------
+
+
 def test_rendering_lists_every_finding_including_the_unidentified_one() -> None:
     # A user who did not know anything was in the photograph needs to see the
-    # streaks that were found but not named, not just the confident ones.
+    # trails that were found but not named, not just the confident ones.
     result = IdentifyResult(
         status=ImageStatus.FOUND,
         findings=(

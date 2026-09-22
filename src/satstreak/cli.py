@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--lon", type=float, help="observer longitude, degrees, overriding EXIF")
     scan.add_argument("--elevation", type=float, default=None, help="observer height, metres")
     scan.add_argument("--exposure", type=float, default=None, help="shutter duration, seconds")
+    scan.add_argument("--alt", type=float, default=None, help="frame centre altitude, degrees")
+    scan.add_argument("--az", type=float, default=None, help="frame centre azimuth, degrees")
+    scan.add_argument("--roll", type=float, default=0.0, help="sensor rotation, degrees")
+    scan.add_argument("--fov", type=float, default=None, help="frame width, degrees")
+    scan.add_argument("--group", default="active", help="CelesTrak group to load")
     scan.add_argument("--json", action="store_true", help="write the result as JSON")
 
     predict = sub.add_parser(
@@ -106,25 +111,81 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "scan":
-        # Milestones 2-6 replace this with a real call into the library. Until an
-        # image can actually be plate-solved there is no honest answer to give,
-        # so the placeholder reports the failure it would really hit rather than
-        # inventing a finding.
-        result = IdentifyResult(
-            status=ImageStatus.NO_POINTING,
-            message=(
-                "Not implemented yet: satstreak cannot plate-solve an image at this "
-                "stage, so the camera's pointing is unknown."
-            ),
-            diagnostics={"image": args.image},
-        )
-        print(_render(result, args.json))
-        return EXIT_MATCH if result.matched else EXIT_NO_MATCH
+        return _scan(args)
 
     if args.command == "predict":
         return _predict(args)
 
     return EXIT_ERROR
+
+
+def _observation_from(args) -> Observation | None:
+    """Build an Observation from the command line, or explain what is missing."""
+    if not args.timestamp:
+        print(
+            "--time is required (EXIF reading arrives with milestone 6), e.g. "
+            "--time 2026-09-21T23:14:07+03:00",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        when = datetime.fromisoformat(args.timestamp)
+    except ValueError:
+        print(f"Could not parse --time {args.timestamp!r} as ISO 8601", file=sys.stderr)
+        return None
+    if when.tzinfo is None:
+        print("--time needs a UTC offset, e.g. 2026-09-21T23:14:07+03:00", file=sys.stderr)
+        return None
+    if args.lat is None or args.lon is None:
+        print("--lat and --lon are required", file=sys.stderr)
+        return None
+    return Observation(
+        timestamp=when.astimezone(timezone.utc),
+        latitude_deg=args.lat,
+        longitude_deg=args.lon,
+        elevation_m=args.elevation or 0.0,
+        exposure_s=args.exposure,
+    )
+
+
+def _scan(args) -> int:
+    from satstreak.geometry import Pointing
+    from satstreak.scan import load_greyscale, scan_image
+
+    observation = _observation_from(args)
+    if observation is None:
+        return EXIT_ERROR
+
+    if args.alt is None or args.az is None or args.fov is None:
+        # Plate solving would supply these. Until it does, saying so plainly
+        # beats guessing a pointing and reporting confident nonsense.
+        print(
+            "--alt, --az and --fov are required: satstreak cannot yet recover the "
+            "camera's aim from the image itself. "
+            "Give roughly where you pointed, e.g. --alt 70 --az 180 --fov 70",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        image = load_greyscale(args.image)
+    except (OSError, RuntimeError) as exc:
+        print(f"Could not read {args.image}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    height, width = image.shape
+    pointing = Pointing(
+        altitude_deg=args.alt,
+        azimuth_deg=args.az,
+        roll_deg=args.roll,
+        scale_arcsec_per_px=args.fov * 3600.0 / width,
+        width_px=width,
+        height_px=height,
+    )
+
+    result = scan_image(image, observation, pointing, group=args.group)
+    print(_render(result, args.json))
+    return EXIT_MATCH if result.matched else EXIT_NO_MATCH
 
 
 def _predict(args) -> int:

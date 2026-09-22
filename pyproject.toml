@@ -26,12 +26,17 @@ classifiers = [
 dependencies = [
     "skyfield>=1.49",  # SGP4 propagation and topocentric geometry (milestone 2)
     "numpy>=1.26",     # skyfield requires it
+    "scipy>=1.11",     # labelling and filtering for trail detection (milestone 4)
 ]
 
 [project.optional-dependencies]
+# Reading image files. Optional because the pipeline works from arrays, which
+# is what a web upload or a test already has.
+images = ["pillow>=10.0"]
+
 # Standalone feasibility spikes (spikes/), not part of the library.
 spike = ["pillow>=10.0", "requests>=2.31"]
-dev = ["pytest>=8.0", "ruff==0.16.4"]
+dev = ["pytest>=8.0", "ruff==0.16.4", "pillow>=10.0"]
 
 [project.scripts]
 satstreak = "satstreak.cli:main"
