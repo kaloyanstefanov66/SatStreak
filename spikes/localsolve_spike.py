@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -70,7 +71,7 @@ class SolveOutcome:
 
 
 def extract_stars(
-    path: Path, max_stars: int = 500, threshold_sigma: float = 5.0, downscale_to: int = 2000
+    path: Path, max_stars: int = 150, threshold_sigma: float = 5.0, downscale_to: int = 2000
 ) -> tuple[list[tuple[float, float]], int, int]:
     """Find star-like point sources and return their pixel centroids, brightest first.
 
@@ -122,7 +123,90 @@ def extract_stars(
     return [(x, y) for _, (y, x) in stars[:max_stars]], full_width, full_height
 
 
-def solve_one(path: Path, solver: astrometry.Solver, hint_deg: float | None) -> SolveOutcome:
+def bounded_parameters(deadline: float, confident_logodds: float = 100.0):
+    """Solver parameters that stop early once a match is clearly good enough.
+
+    `logodds_callback` also checks the deadline, but it is **not** a reliable
+    timeout: the library only invokes it when there are log-odds to report, so a
+    search grinding through quads without matching anything never calls it and
+    never notices the clock. The real bound is the child-process kill in
+    `solve_with_hard_timeout`; this is only a fast path out of a search that has
+    already succeeded.
+    """
+
+    def callback(logodds: list[float]) -> astrometry.Action:
+        if time.monotonic() > deadline or (logodds and max(logodds) > confident_logodds):
+            return astrometry.Action.STOP
+        return astrometry.Action.CONTINUE
+
+    return astrometry.SolutionParameters(logodds_callback=callback)
+
+
+def _solve_in_child(
+    stars, hint_deg, width, cache_dir, timeout_s, queue
+) -> None:  # pragma: no cover
+    """Runs in a separate process so the parent can kill it if it overruns."""
+    try:
+        solver = astrometry.Solver(SERIES.index_files(cache_directory=str(cache_dir), scales=None))
+        size_hint = None
+        if hint_deg:
+            centre = hint_deg * 3600.0 / width
+            size_hint = astrometry.SizeHint(
+                lower_arcsec_per_pixel=centre * 0.5, upper_arcsec_per_pixel=centre * 2.0
+            )
+        solution = solver.solve(
+            stars=stars,
+            size_hint=size_hint,
+            position_hint=None,
+            solution_parameters=bounded_parameters(time.monotonic() + timeout_s),
+        )
+        if not solution.has_match():
+            queue.put(("no match", None))
+            return
+        match = solution.best_match()
+        queue.put(
+            (
+                None,
+                {
+                    "ra": float(match.center_ra_deg),
+                    "dec": float(match.center_dec_deg),
+                    "scale": float(match.scale_arcsec_per_pixel),
+                },
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - reported to the parent, not raised
+        queue.put((f"{type(exc).__name__}: {exc}", None))
+
+
+def solve_with_hard_timeout(stars, hint_deg, width, cache_dir, timeout_s):
+    """Solve with a bound the solver cannot talk its way out of.
+
+    The library has no timeout and its callback is unreliable as one, so the solve
+    runs in a child process that the parent terminates on overrun. Without this a
+    single image can consume an entire run: on the first attempt one wide panorama
+    held the batch for over an hour and produced nothing.
+    """
+    queue: multiprocessing.Queue = multiprocessing.Queue()
+    child = multiprocessing.Process(
+        target=_solve_in_child,
+        args=(stars, hint_deg, width, cache_dir, timeout_s, queue),
+        daemon=True,
+    )
+    child.start()
+    child.join(timeout_s)
+    if child.is_alive():
+        child.terminate()
+        child.join(5)
+        return f"timed out after {timeout_s:.0f}s", None
+    try:
+        return queue.get_nowait()
+    except Exception:  # noqa: BLE001 - child died without reporting
+        return "solver process died without a result", None
+
+
+def solve_one(
+    path: Path, cache_dir: Path, hint_deg: float | None, timeout_s: float = 90.0
+) -> SolveOutcome:
     started = time.monotonic()
     try:
         stars, width, height = extract_stars(path)
@@ -148,35 +232,10 @@ def solve_one(path: Path, solver: astrometry.Solver, hint_deg: float | None) -> 
             error="too few stars extracted to attempt a solve",
         )
 
-    size_hint = None
-    if hint_deg:
-        # Arcseconds per pixel, bracketed generously: a hint that is wrong in the
-        # wrong direction is worse than no hint at all.
-        centre = hint_deg * 3600.0 / width
-        size_hint = astrometry.SizeHint(
-            lower_arcsec_per_pixel=centre * 0.5, upper_arcsec_per_pixel=centre * 2.0
-        )
-
-    try:
-        solution = solver.solve(
-            stars=stars,
-            size_hint=size_hint,
-            position_hint=None,
-            solution_parameters=astrometry.SolutionParameters(),
-        )
-    except Exception as exc:  # noqa: BLE001 - a spike records failures
-        return SolveOutcome(
-            image=path.name,
-            width=width,
-            height=height,
-            stars_found=len(stars),
-            solved=False,
-            seconds=round(time.monotonic() - started, 1),
-            error=f"solver raised: {type(exc).__name__}: {exc}",
-        )
+    error, match = solve_with_hard_timeout(stars, hint_deg, width, cache_dir, timeout_s)
 
     elapsed = round(time.monotonic() - started, 1)
-    if not solution.has_match():
+    if match is None:
         return SolveOutcome(
             image=path.name,
             width=width,
@@ -184,11 +243,9 @@ def solve_one(path: Path, solver: astrometry.Solver, hint_deg: float | None) -> 
             stars_found=len(stars),
             solved=False,
             seconds=elapsed,
-            error="no match",
+            error=error,
         )
 
-    match = solution.best_match()
-    scale = match.scale_arcsec_per_pixel
     return SolveOutcome(
         image=path.name,
         width=width,
@@ -196,10 +253,10 @@ def solve_one(path: Path, solver: astrometry.Solver, hint_deg: float | None) -> 
         stars_found=len(stars),
         solved=True,
         seconds=elapsed,
-        ra_deg=float(match.center_ra_deg),
-        dec_deg=float(match.center_dec_deg),
-        scale_arcsec_per_px=float(scale),
-        field_width_deg=round(float(scale) * width / 3600.0, 2),
+        ra_deg=match["ra"],
+        dec_deg=match["dec"],
+        scale_arcsec_per_px=match["scale"],
+        field_width_deg=round(match["scale"] * width / 3600.0, 2),
     )
 
 
@@ -213,6 +270,12 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="approximate field width in degrees, to narrow the scale search",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=90.0,
+        help="seconds to spend on any one image before giving up on it",
     )
     parser.add_argument("--out", type=Path, default=Path("spike-out/localsolve.json"))
     args = parser.parse_args(argv)
@@ -228,15 +291,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No images found in {args.target}", file=sys.stderr)
         return 2
 
-    print(f"Loading {SERIES.__class__.__name__ if False else 'series_4100'} indexes...", flush=True)
-    t0 = time.monotonic()
-    solver = astrometry.Solver(SERIES.index_files(cache_directory=str(args.cache), scales=None))
-    print(f"  ready in {time.monotonic() - t0:.0f}s\n", flush=True)
+    print(f"Using series_4100 indexes from {args.cache}", flush=True)
+    print(f"Per-image hard timeout: {args.timeout:.0f}s", flush=True)
+    print()
 
     outcomes: list[SolveOutcome] = []
     for index, path in enumerate(paths, start=1):
         print(f"[{index}/{len(paths)}] {path.name[:46]:<48} ", end="", flush=True)
-        outcome = solve_one(path, solver, args.hint_deg)
+        outcome = solve_one(path, args.cache, args.hint_deg, args.timeout)
         outcomes.append(outcome)
         if outcome.solved:
             print(
