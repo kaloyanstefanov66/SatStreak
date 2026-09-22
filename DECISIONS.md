@@ -229,3 +229,42 @@ scale and orientation, and exposes nothing specific to how any one solver works.
 Until such a backend exists, Windows CLI users need WSL, Docker or the hosted
 demo, and the README says so plainly rather than letting them find out at install
 time.
+
+## 12. Plate solving is unresolved, and these are the measurements so far
+
+Recorded because the negative results are the useful part, and because the next
+attempt should start from them rather than repeat them.
+
+**The solver runs correctly and returns verdicts.** It is not hanging or
+misconfigured. What it returns is "no match".
+
+**Index scale restriction is the dominant performance lever.** Loading a single
+scale returns a verdict in about 12 seconds; loading all thirteen ran past 240
+seconds without returning one at all. The library's own example loads exactly one
+scale, which is easy to miss. Any future work must restrict scales.
+
+**Nothing has solved yet**, across: the full ~70 degree frame at several scale
+sets, a 35% central crop (~24 degrees) at matched scales, and a 40% crop with all
+scales. All returned "no match" rather than failing.
+
+**Every test image is 65 to 100 degrees wide**, median 74. That matters because it
+is also the phone range: a phone main camera is about 70 degrees and its
+ultra-wide is 100 to 120. Quad matching assumes a gnomonic tangent plane, and
+across such fields both projection curvature and lens distortion distort quad
+shapes. This remains the leading hypothesis but is **not proven** -- the crop test
+that would have isolated it was inconclusive, because the run was killed on wall
+clock before it returned.
+
+**Stitched panoramas cannot be solved at all**, and one was in the first test set
+without being noticed. A panorama uses a cylindrical or equirectangular
+projection; the tangent-plane assumption does not merely degrade, it does not
+apply. `satstreak scan` should detect and reject panoramas with a clear message
+rather than searching and reporting `no_pointing`.
+
+**The remaining untested hypothesis is the extracted sources themselves.** The
+test frames are landscapes, where much of the image is terrain. The brightest 100
+sources may include foreground rather than sky. The next attempt should validate
+extraction against an image with a **published WCS**, so that "did the solver
+fail" and "were those actually stars" can be told apart. Blind retrying without
+a reference is what consumed this session.
+

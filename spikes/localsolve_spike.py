@@ -9,7 +9,7 @@ repeatedly, so the solver has to run locally. This spike establishes whether the
 
 Run it under Linux or WSL::
 
-    python -m pip install astrometry scipy pillow
+    python -m pip install astrometry sep pillow
     python spikes/localsolve_spike.py spike-out/corpus/images/ --cache ~/astrometry-cache
 
 Why there is an extractor in here
@@ -38,16 +38,20 @@ from pathlib import Path
 try:
     import astrometry
     import numpy as np
+    import sep
     from PIL import Image
-    from scipy import ndimage
 except ImportError as exc:  # pragma: no cover - spike-only dependency
     sys.exit(
         f"Missing dependency ({exc}).\n"
         "This spike needs Linux or WSL. Run:\n"
-        "  python -m pip install astrometry scipy pillow"
+        "  python -m pip install astrometry sep pillow"
     )
 
 Image.MAX_IMAGE_PIXELS = None  # Commons panoramas exceed Pillow's decompression guard
+
+# SEP's default pixel stack (300k) overflows on dense star fields, which then
+# surfaces as an exception rather than as sources.
+sep.set_extract_pixstack(2_000_000)
 
 #: Tycho-2 indexes, "good for images wider than 1 degree". 0.36 GB for every
 #: scale, against 30+ GB for the narrow-field Gaia series, which a 70-degree
@@ -71,14 +75,24 @@ class SolveOutcome:
 
 
 def extract_stars(
-    path: Path, max_stars: int = 150, threshold_sigma: float = 5.0, downscale_to: int = 2000
+    path: Path, max_stars: int = 120, threshold_sigma: float = 3.0, downscale_to: int = 2500
 ) -> tuple[list[tuple[float, float]], int, int]:
     """Find star-like point sources and return their pixel centroids, brightest first.
 
-    Crude on purpose: greyscale, subtract a coarse background, threshold at a few
-    sigma above the residual noise, label connected components, and take centroids.
-    Nothing here is clever, which is the point — if this is enough to solve a phone
-    photograph, the pipeline does not need anything cleverer.
+    Uses SEP, the Source Extractor implementation astronomers actually use, rather
+    than hand-rolled thresholding. The hand-rolled version this replaces reported
+    30,000 to 48,000 "sources" per image, over half of them single pixels, and
+    solved nothing: feeding the solver a list that is mostly noise wastes its quad
+    search on sources that are not there.
+
+    Two filters matter beyond SEP's own detection:
+
+    * **Roundness.** Elongated detections are rejected. On these images the
+      elongated things are the satellite trails themselves, along with aeroplanes
+      and star trailing from a moving mount. Handing a trail to the solver as if
+      it were a star corrupts the very geometry we are trying to recover.
+    * **Brightness order.** Astrometry.net matches quads from the brightest
+      sources down, so the ordering is part of the contract, not a convenience.
     """
     with Image.open(path) as img:
         full_width, full_height = img.size
@@ -89,38 +103,34 @@ def extract_stars(
                 (max(1, int(grey.width * ratio)), max(1, int(grey.height * ratio))),
                 Image.LANCZOS,
             )
-        data = np.asarray(grey, dtype=np.float32)
+        data = np.ascontiguousarray(np.asarray(grey, dtype=np.float32))
 
     scale_back = full_width / data.shape[1]
 
-    # A wide night photograph has strong large-scale gradients: light pollution,
-    # the Milky Way, vignetting. Thresholding without removing them finds the
-    # bright corner of the sky rather than the stars in it.
-    background = ndimage.uniform_filter(data, size=max(8, min(data.shape) // 20))
-    residual = data - background
+    # SEP models the varying background properly, which matters here: a wide night
+    # photograph has a light-pollution gradient, and in a city that gradient is
+    # often stronger than the stars sitting on top of it.
+    background = sep.Background(data)
+    subtracted = data - background.back()
 
-    noise = float(np.median(np.abs(residual - np.median(residual)))) * 1.4826
-    if noise <= 0:
-        noise = float(residual.std()) or 1.0
-    mask = residual > threshold_sigma * noise
+    # A crash here must not be reported as "no stars found". They are different
+    # facts, and conflating them turns a bug into an apparently empty sky -- which
+    # is exactly what happened on one frame before the pixel stack was raised.
+    objects = sep.extract(subtracted, thresh=threshold_sigma, err=background.globalrms, minarea=4)
 
-    labels, count = ndimage.label(mask)
-    if count == 0:
+    if len(objects) == 0:
         return [], full_width, full_height
 
-    sizes = ndimage.sum(mask, labels, range(1, count + 1))
-    peaks = ndimage.maximum(residual, labels, range(1, count + 1))
-    centroids = ndimage.center_of_mass(residual, labels, range(1, count + 1))
+    semi_major = np.maximum(objects["a"], 1e-6)
+    roundness = objects["b"] / semi_major
+    keep = (roundness > 0.6) & (objects["a"] < 10.0)
+    kept = objects[keep]
+    if len(kept) == 0:
+        return [], full_width, full_height
 
-    stars = [
-        # Reject single hot pixels and large blobs (aeroplanes, clouds, the moon,
-        # foreground). Stars occupy a few pixels.
-        (float(peak), (float(cy) * scale_back, float(cx) * scale_back))
-        for size, peak, (cy, cx) in zip(sizes, peaks, centroids, strict=True)
-        if 2 <= size <= 200
-    ]
-    stars.sort(key=lambda item: item[0], reverse=True)
-    return [(x, y) for _, (y, x) in stars[:max_stars]], full_width, full_height
+    order = np.argsort(kept["flux"])[::-1][:max_stars]
+    stars = [(float(kept["x"][i]) * scale_back, float(kept["y"][i]) * scale_back) for i in order]
+    return stars, full_width, full_height
 
 
 def bounded_parameters(deadline: float, confident_logodds: float = 100.0):
@@ -210,7 +220,7 @@ def solve_one(
     started = time.monotonic()
     try:
         stars, width, height = extract_stars(path)
-    except Exception as exc:  # noqa: BLE001 - a spike records failures
+    except Exception as exc:  # noqa: BLE001 - recorded as an extraction error, not as an empty sky
         return SolveOutcome(
             image=path.name,
             width=0,
@@ -270,6 +280,16 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="approximate field width in degrees, to narrow the scale search",
+    )
+    parser.add_argument(
+        "--scales",
+        type=str,
+        default="",
+        help=(
+            "comma-separated index scales to load, e.g. 17,18,19. Loading all of them "
+            "is roughly twenty times slower: one scale returns a verdict in ~12s where "
+            "all thirteen ran past 240s without returning one at all"
+        ),
     )
     parser.add_argument(
         "--timeout",
