@@ -140,6 +140,13 @@ BIG_CAMERA_HINTS = (
 #: *upward*, so the width used is recorded alongside every result.
 THUMBNAIL_WIDTH = 3000
 
+#: Consecutive transport errors tolerated per item before giving up on it.
+MAX_POLL_ERRORS = 4
+
+#: Pause between individual API requests. Nova is a free service run for
+#: everyone; a batch poll without this is several requests per second.
+REQUEST_PACING_S = 0.5
+
 
 @dataclass
 class CorpusItem:
@@ -370,7 +377,7 @@ def submit_all(nova: Nova, items: list[CorpusItem], pause_s: float = 1.0) -> dic
                 Path(item.local_path).name, blob, item.exif.estimated_fov_width_deg
             )
         except Exception as exc:  # noqa: BLE001 - a spike records failures, it does not raise
-            item.solved = False
+            item.solved = None  # never reached the solver, so nothing was learned
             item.error = f"submit failed: {type(exc).__name__}: {exc}"
         time.sleep(pause_s)  # do not hammer the queue
     return pending
@@ -381,16 +388,39 @@ def collect_all(
     items: list[CorpusItem],
     pending: dict[int, int],
     budget_s: float,
-    poll_s: float = 10.0,
+    poll_s: float = 5.0,
 ) -> None:
-    """Poll the whole submitted set until every job resolves or the budget runs out."""
+    """Poll the whole submitted set until every job resolves or the budget runs out.
+
+    Two rules matter more than speed here.
+
+    A transport error is never recorded as ``solved = False``. Not being able to
+    ask is not the same as being told no, and conflating them would deflate the
+    solve rate with network noise while looking like a real measurement. Items
+    that never yield a verdict keep ``solved = None`` and are excluded from the
+    denominator.
+
+    Requests are paced. Polling 45 submissions in a tight loop is several
+    requests per second against a free public service, which is both rude and
+    self-defeating: nova throttles it, and the throttling then looks like
+    failures to solve.
+    """
     started = time.monotonic()
     deadline = started + budget_s
     jobs: dict[int, int] = {}
+    consecutive_errors: dict[int, int] = {}
     total = len(pending)
+
+    def retire(index: int, mark: str, note: str) -> None:
+        pending.pop(index, None)
+        label = items[index].title.removeprefix("File:")[:44]
+        done = total - len(pending)
+        print(f"  [{done}/{total}] {mark:<10} {label:<46} {note}")
 
     while pending and time.monotonic() < deadline:
         for index in list(pending):
+            if time.monotonic() >= deadline:
+                break
             item = items[index]
             try:
                 if index not in jobs:
@@ -399,11 +429,20 @@ def collect_all(
                         continue  # not picked up off the queue yet
                     jobs[index] = job_id
                 status = nova.job_status(jobs[index])
-            except Exception as exc:  # noqa: BLE001 - record and move on
-                item.solved = False
-                item.error = f"{type(exc).__name__}: {exc}"
-                pending.pop(index)
+                consecutive_errors[index] = 0
+            except Exception as exc:  # noqa: BLE001 - a spike records, it does not raise
+                consecutive_errors[index] = consecutive_errors.get(index, 0) + 1
+                if consecutive_errors[index] >= MAX_POLL_ERRORS:
+                    item.solved = None  # unknown, NOT a failure to solve
+                    item.error = (
+                        f"gave up after {MAX_POLL_ERRORS} consecutive polling errors; "
+                        f"last was {type(exc).__name__}: {exc}"
+                    )
+                    retire(index, "no verdict", "(polling kept failing)")
                 continue
+            finally:
+                # Paces every request, which also paces the whole cycle.
+                time.sleep(REQUEST_PACING_S)
 
             if status not in ("success", "failure"):
                 continue
@@ -419,19 +458,16 @@ def collect_all(
                     item.field_radius_deg = cal.get("radius")
                 except Exception as exc:  # noqa: BLE001 - solved is still solved
                     item.error = f"calibration unavailable: {type(exc).__name__}: {exc}"
-            pending.pop(index)
-
-            done = total - len(pending)
-            label = item.title.removeprefix("File:")[:44]
-            mark = "SOLVED" if item.solved else "failed"
-            print(f"  [{done}/{total}] {mark:<7} {label:<46} [{item.camera_class}]")
+            retire(index, "SOLVED" if item.solved else "failed", f"[{item.camera_class}]")
 
         if pending:
             time.sleep(poll_s)
 
-    for index in pending:
-        items[index].solved = False
+    # Ran out of time rather than out of answers: also unknown, not a failure.
+    for index in list(pending):
+        items[index].solved = None
         items[index].error = f"no verdict within the {budget_s:.0f}s batch budget"
+        retire(index, "no verdict", "(batch budget expired)")
 
 
 def summarise(items: list[CorpusItem]) -> dict[str, Any]:
@@ -446,6 +482,10 @@ def summarise(items: list[CorpusItem]) -> dict[str, Any]:
             "solve_rate_upper_bound": (
                 round(len(solved) / len(attempted), 3) if attempted else None
             ),
+            # Items nova never gave a verdict on. Excluded from the rate above
+            # rather than silently counted as failures, and surfaced here so a
+            # rate computed over a handful of images cannot look authoritative.
+            "no_verdict": len(subset) - len(attempted),
             "median_seconds_to_verdict": times[len(times) // 2] if times else None,
         }
 
@@ -561,7 +601,10 @@ def main(argv: list[str] | None = None) -> int:
     for name, stats in summary["by_camera_class"].items():
         rate = stats["solve_rate_upper_bound"]
         shown = "n/a" if rate is None else f"{rate:.0%}"
-        print(f"  {name:>12}: {stats['solved']}/{stats['attempted']} solved  (upper bound {shown})")
+        print(
+            f"  {name:>12}: {stats['solved']}/{stats['attempted']} solved  "
+            f"(upper bound {shown}, {stats['no_verdict']} without a verdict)"
+        )
     print(f"\n  with timestamp: {summary['with_timestamp']}/{len(items)}")
     print(f"  with GPS:       {summary['with_gps']}/{len(items)}")
     print(f"  with exposure:  {summary['with_exposure']}/{len(items)}")
