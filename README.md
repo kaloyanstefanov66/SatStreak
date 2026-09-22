@@ -12,10 +12,37 @@ something crossed the frame while it was open. You will often not have noticed.
 made each one — by NORAD ID and name, with a confidence score — or tells you
 plainly that it could not work it out.
 
-> **Status: pre-alpha, and not yet useful.** The scaffolding, data model, test
-> suite and orbit propagation are in place. Plate solving, trail detection and
-> matching are not, so `satstreak scan` cannot yet answer anything. The
-> feasibility question below is also still open. See [Roadmap](#roadmap).
+> **Status: `predict` works today. `scan` does not yet.** Orbit propagation and
+> sky-to-sensor geometry are done and tested, so SatStreak can already tell you
+> which satellites crossed a patch of sky and what trails they drew. Trail
+> detection, matching and plate solving are still to come, so `satstreak scan`
+> cannot yet identify a trail in a photograph. See [Roadmap](#roadmap).
+
+## What works today
+
+`satstreak predict` takes a time, a place and where you aimed, and lists what
+crossed the frame. It needs no photograph and no plate solving:
+
+```console
+$ satstreak predict --time 2026-09-22T17:20:00+03:00     --lat 42.6977 --lon 23.3219 --elevation 550     --alt 85 --az 180 --fov 70 --exposure 20
+27 satellite(s) in frame at 2026-09-22T14:20:00+00:00
+  note: 70 deg field - positions near the corners are approximate, as the
+  tangent-plane model ignores lens distortion
+
+  STARLINK-1246          NORAD 45235   alt  88.4 deg  arc 18.53 deg  trail 1136px at  37.3 deg
+  NAVSTAR 43 (USA 132)   NORAD 24876   alt  87.8 deg  arc  0.17 deg  trail   10px at 118.4 deg
+  STARLINK-36851         NORAD 67943   alt  86.6 deg  arc 16.42 deg  trail  985px at   6.3 deg
+  ONEWEB-0011            NORAD 44062   alt  80.6 deg  arc  6.72 deg  trail  390px at  91.1 deg
+  CXO                    NORAD 25867   alt  80.2 deg  arc  0.05 deg  trail    3px at  13.5 deg
+```
+
+The spread is a good sanity check on the maths: Starlink at ~550 km draws a
+thousand-pixel trail across a 20 second exposure, the navigation satellites at
+~20,000 km barely move, and Chandra on its long elliptical orbit is almost a
+point.
+
+This is **prediction, not identification** — it says what *could* be in a frame,
+not what is. Identifying an actual trail is what `scan` will do.
 
 ## How it is meant to work
 
@@ -77,7 +104,7 @@ being answered first, before the machinery that depends on it is built.
 | 0b | Upper-bound solve rate from public images, by camera class (`spikes/`) | ready to run |
 | 1 | Package skeleton, data model, tests, CI | done |
 | 2 | Orbit data: CelesTrak fetch with caching, propagation | done |
-| 3 | Geometry: pointing + observer + time window to pixel-space tracks, plus `satstreak predict` | not started |
+| 3 | Geometry: sky-to-sensor projection, plus `satstreak predict` | done |
 | 4 | Trail detection across the whole frame | not started |
 | 5 | Matcher and calibrated confidence score | not started |
 | 6 | Real photographs: EXIF, plate-solve backend, measured accuracy | not started |
