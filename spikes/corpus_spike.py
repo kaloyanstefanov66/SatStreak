@@ -162,6 +162,10 @@ class CorpusItem:
     exif: ExifFacts
     downscaled_to_px: int | None = None
     local_path: str | None = None
+    submission_id: int | None = None
+    """Nova submission id, recorded at submit time rather than at verdict time.
+    Without it a stalled run leaves nothing to investigate: the jobs exist on
+    nova's side but the local record has no handle on them."""
     solved: bool | None = None
     seconds: float | None = None
     """Wall seconds from the start of the batch to this job's verdict, not the
@@ -376,6 +380,7 @@ def submit_all(nova: Nova, items: list[CorpusItem], pause_s: float = 1.0) -> dic
             pending[index] = nova.submit(
                 Path(item.local_path).name, blob, item.exif.estimated_fov_width_deg
             )
+            item.submission_id = pending[index]
         except Exception as exc:  # noqa: BLE001 - a spike records failures, it does not raise
             item.solved = None  # never reached the solver, so nothing was learned
             item.error = f"submit failed: {type(exc).__name__}: {exc}"
