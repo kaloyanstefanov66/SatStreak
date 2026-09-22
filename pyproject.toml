@@ -20,9 +20,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 
-# Deliberately empty. Runtime dependencies are added per milestone, so that every
-# dependency has to earn its place rather than arriving with the scaffolding.
-dependencies = []
+# Added per milestone, so each dependency has to earn its place rather than
+# arriving with the scaffolding. HTTP uses the standard library on purpose:
+# one download does not justify pulling in an HTTP stack.
+dependencies = [
+    "skyfield>=1.49",  # SGP4 propagation and topocentric geometry (milestone 2)
+    "numpy>=1.26",     # skyfield requires it
+]
 
 [project.optional-dependencies]
 # Standalone feasibility spikes (spikes/), not part of the library.

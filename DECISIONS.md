@@ -66,17 +66,19 @@ cheap: the matcher computes it internally to have candidates to score, so exposi
 it as `satstreak predict` costs almost nothing. It is also the debugging view
 needed while building the matcher.
 
-It must not be presented as identification. A 26 mm-equivalent phone frame covers
-about **16% of the visible sky**, which at any instant contains roughly:
+It must not be presented as identification. These are **measured**, not estimated:
+CelesTrak's `active` group held 15,990 element sets when checked, and propagating
+all of them to Sofia gave 666 above 10 degrees altitude — 4.2% of the catalogue.
+A 26 mm-equivalent phone frame covers about 16% of the visible sky, so of order
+**100 catalogued objects sit inside a single phone frame** at any moment.
 
-| Altitude | Objects above horizon | Inside the frame |
-|---------:|----------------------:|-----------------:|
-|   340 km |                  ~709 |             ~115 |
-|   550 km |                ~1,113 |             ~180 |
-|   800 km |                ~1,562 |             ~253 |
+An earlier version of this entry estimated ~180 from a 28,000-object figure. That
+number is the full catalogue including debris; `active` is a little over half of
+it. The measured value is used instead.
 
-(From a ~28,000-object catalogue. Sunlit-and-bright-enough filtering cuts this
-substantially, but the output remains a candidate list, not a name.)
+Sunlit-and-bright-enough filtering cuts the list substantially, and a further 38%
+of what is above the horizon turns out to be geostationary (see decision 6) and so
+leaves no trail at all. The output still remains a candidate list, not a name.
 
 `predict` is therefore documented as prediction. Prior art already covers this
 ground — SatIdentifier and the IAU CPS SatChecker FOV tool both do it — so it is
@@ -108,6 +110,12 @@ Every objection in decision 5 inverts for geostationary objects:
 - The signature is unmistakable and is the inverse of the LEO case: on a fixed
   tripod with a long exposure, stars trail while a GEO satellite stays a point.
 - They lie along the Clarke belt, a well-defined arc that is a strong prior.
+- Measured: of 200 randomly sampled objects above 10 degrees over Sofia, **76
+  (38%) had an apparent arc below 0.01 degrees across a 20 second exposure**,
+  at a median range of 38,205 km. Geostationary objects are a much larger share
+  of the visible sky than intuition suggests. For contrast, Starlink at 540-660
+  km swept 12.9-15.2 degrees over the same exposure, or 0.64-0.76 deg/s, which
+  corroborates the ~0.8 deg/s overhead figure used in decision 5.
 
 Deferred rather than adopted because GEO satellites are typically magnitude 10–13
 and are not visible to a phone camera. Building this would shift the audience from
@@ -156,3 +164,27 @@ merely asserted.
 This follows from the framing rather than from taste: an evaluation designed for
 "name this streak I found" measures only the second number, and would have scored
 the tool well while it was quietly inventing findings.
+
+## 10. The plate-solving backend must be local for evaluation
+
+nova.astrometry.net is fine for solving the occasional image by hand. It is not a
+viable backend for evaluating a corpus, and the evidence is direct: a single
+submission of one image sat in the public queue for **over five minutes without
+being assigned a job at all**, and a batch of thirty produced no verdicts in
+twenty-five minutes. This was measured after request pacing was added, so it is
+not self-inflicted throttling.
+
+Milestone 6 needs to solve a corpus repeatedly — once per evaluation run, and
+again whenever the detector or matcher changes. A backend whose latency is
+unbounded and set by other people's load makes that impossible, and would make
+the accuracy numbers a function of how busy a third party was that afternoon.
+
+So the solver becomes a swappable backend with a local implementation, which was
+already the intention but is now a requirement rather than a preference. The
+choice between running astrometry.net locally (Docker plus several gigabytes of
+index files, well-proven on wide fields) and `tetra3` (pure Python, much lighter,
+less proven on phone photographs) is **still open** and should be decided on a
+spike rather than on reputation.
+
+The hosted service keeps one honest use: an independent check on a handful of
+images, to catch a local installation that is silently misconfigured.

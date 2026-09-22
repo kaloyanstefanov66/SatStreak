@@ -76,7 +76,7 @@ being answered first, before the machinery that depends on it is built.
 | 0 | Feasibility: can real night photos be plate-solved? (`spikes/`) | in progress |
 | 0b | Upper-bound solve rate from public images, by camera class (`spikes/`) | ready to run |
 | 1 | Package skeleton, data model, tests, CI | done |
-| 2 | Orbit data: CelesTrak fetch with caching, propagation | not started |
+| 2 | Orbit data: CelesTrak fetch with caching, propagation | done |
 | 3 | Geometry: pointing + observer + time window to pixel-space tracks, plus `satstreak predict` | not started |
 | 4 | Trail detection across the whole frame | not started |
 | 5 | Matcher and calibrated confidence score | not started |
@@ -90,8 +90,8 @@ combined figure would hide that.
 
 `satstreak predict` will list every satellite that crossed a solved image's field
 of view. That is **prediction, not identification** — a phone frame covers about
-16% of the visible sky and can contain a couple of hundred catalogued objects at
-once. It answers what *could* be in the picture, and exists mainly because the
+16% of the visible sky, and measurement against the live catalogue puts of order
+100 catalogued objects inside one at any moment. It answers what *could* be in the picture, and exists mainly because the
 matcher computes it anyway.
 
 A hosted web demo and a write-up come after milestone 6, and only if the accuracy
