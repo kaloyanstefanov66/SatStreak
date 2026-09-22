@@ -156,3 +156,61 @@ def test_a_trail_with_no_candidate_overhead_is_reported_unidentified(
     assert finding.status is FindingStatus.UNIDENTIFIED
     assert finding.candidates == ()
     assert result.matched == ()
+
+
+# --- solving for sensor roll ------------------------------------------------
+
+
+def test_roll_is_recovered_without_being_told(
+    frame: SyntheticFrame,
+    observation: Observation,
+    pointing: Pointing,
+    propagator: Propagator,
+) -> None:
+    # Roll is the one pointing value a photographer cannot report, so the tool
+    # has to find it. The frame was rendered at 11 degrees; the scan is given 0.
+    from dataclasses import replace
+
+    wrong = replace(pointing, roll_deg=0.0)
+    result = scan_image(frame.image, observation, wrong, propagator=propagator, search_roll=True)
+
+    assert result.diagnostics["roll_searched"] is True
+    assert result.diagnostics["roll_deg"] == pytest.approx(11.0, abs=1.0)
+    assert result.findings[0].status is FindingStatus.MATCH
+    assert result.findings[0].best is not None
+    assert result.findings[0].best.norad_id == ISS_NORAD
+
+
+def test_without_the_roll_search_a_wrong_roll_finds_nothing(
+    frame: SyntheticFrame,
+    observation: Observation,
+    pointing: Pointing,
+    propagator: Propagator,
+) -> None:
+    # The companion to the test above: it shows the search is doing real work
+    # rather than the match being insensitive to rotation.
+    from dataclasses import replace
+
+    wrong = replace(pointing, roll_deg=0.0)
+    result = scan_image(frame.image, observation, wrong, propagator=propagator)
+    assert result.findings[0].status is FindingStatus.UNIDENTIFIED
+
+
+def test_the_roll_search_reports_how_well_it_did(
+    frame: SyntheticFrame,
+    observation: Observation,
+    pointing: Pointing,
+    propagator: Propagator,
+) -> None:
+    # A search always returns its best angle, so the score it reached is what
+    # distinguishes a real fit from the least bad of a bad set.
+    from dataclasses import replace
+
+    result = scan_image(
+        frame.image,
+        observation,
+        replace(pointing, roll_deg=0.0),
+        propagator=propagator,
+        search_roll=True,
+    )
+    assert result.diagnostics["roll_search_total_score"] > 0.5

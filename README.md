@@ -12,13 +12,35 @@ something crossed the frame while it was open. You will often not have noticed.
 made each one — by NORAD ID and name, with a confidence score — or tells you
 plainly that it could not work it out.
 
-> **Status: `predict` works today. `scan` does not yet.** Orbit propagation and
-> sky-to-sensor geometry are done and tested, so SatStreak can already tell you
-> which satellites crossed a patch of sky and what trails they drew. Trail
-> detection, matching and plate solving are still to come, so `satstreak scan`
-> cannot yet identify a trail in a photograph. See [Roadmap](#roadmap).
+> **Status: working, with one thing still missing.** `scan` finds trails in a
+> photograph and names the satellites that made them. What it cannot yet do is
+> work out where the camera was aimed, so you have to tell it roughly where you
+> pointed — plate solving is milestone 6. Accuracy has not been measured against
+> real photographs yet. See [Roadmap](#roadmap).
 
 ## What works today
+
+Point it at a photograph, say roughly where you aimed, and it names what it finds:
+
+```console
+$ satstreak scan night-sky.png     --time 2026-09-22T17:31:07+03:00 --lat 42.6977 --lon 23.3219     --alt 78.5 --az 273.1 --fov 50 --exposure 20
+(solved sensor roll: 23.0 deg)
+Found 5 trail(s):
+  1. STARLINK-30354 (NORAD 57772) - confidence 100%  [292px at 78 deg]
+  2. STARLINK-3995 (NORAD 52632) - confidence 100%   [344px at 31 deg]
+  3. STARLINK-3589 (NORAD 51997) - confidence 100%   [133px at 107 deg]
+  4. STARLINK-36914 (NORAD 67942) - confidence 100%  [60px at 75 deg]
+  5. STARLINK-11640 [DTC] (NORAD 63314) - confidence 39%  [959px at 77 deg]
+```
+
+You are not asked for the camera's rotation, because nobody knows it. SatStreak
+solves for it: above, it recovered 23.0 degrees, which was exactly right.
+
+The fifth result is worth reading. Detection merged two overlapping trails into
+one, and the confidence fell to 39% where the others scored 100%, because the
+combined length no longer fitted any single satellite. Nothing instructs it to
+do that.
+
 
 `satstreak predict` takes a time, a place and where you aimed, and lists what
 crossed the frame. It needs no photograph and no plate solving:
@@ -105,8 +127,9 @@ being answered first, before the machinery that depends on it is built.
 | 1 | Package skeleton, data model, tests, CI | done |
 | 2 | Orbit data: CelesTrak fetch with caching, propagation | done |
 | 3 | Geometry: sky-to-sensor projection, plus `satstreak predict` | done |
-| 4 | Trail detection across the whole frame | in progress |
+| 4 | Trail detection across the whole frame | done |
 | 5 | Matcher, validated end to end against synthetic frames | done (score not yet calibrated) |
+| 5b | Automatic sensor-roll solving | done |
 | 6 | Real photographs: EXIF, plate-solve backend, measured accuracy | not started |
 | 7 | Windows-capable solver backend, so the CLI needs no WSL or Docker | not started |
 

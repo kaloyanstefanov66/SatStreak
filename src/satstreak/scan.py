@@ -13,6 +13,7 @@ different answers and are reported as four different answers.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,7 @@ from satstreak.geometry import Pointing
 from satstreak.match import match_streak
 from satstreak.predict import Prediction, predict
 from satstreak.propagate import Propagator
-from satstreak.types import IdentifyResult, ImageStatus, Observation
+from satstreak.types import IdentifyResult, ImageStatus, Observation, Streak
 
 
 def load_greyscale(path: str | Path) -> np.ndarray:
@@ -44,6 +45,72 @@ def load_greyscale(path: str | Path) -> np.ndarray:
         return np.asarray(img.convert("L"), dtype=np.float32)
 
 
+#: Coarse step for the roll search, in degrees, followed by a fine pass around
+#: the best coarse value. A trail's orientation wraps at 180, so the search only
+#: needs half a turn.
+ROLL_COARSE_STEP_DEG = 3.0
+ROLL_FINE_STEP_DEG = 0.25
+
+
+def solve_roll(
+    streaks: list[Streak],
+    overhead: list[Prediction],
+    pointing: Pointing,
+) -> tuple[float, float]:
+    """Find the sensor rotation that best explains the detected trails.
+
+    Roll is the one pointing parameter a photographer cannot report. Altitude,
+    azimuth and field of view can all be estimated from where they aimed and
+    what lens they used; how the camera was rotated about its optical axis is
+    not something anyone knows. A plate solve would supply it, and until one
+    exists the alternative to searching for it is requiring a number the user
+    cannot give.
+
+    Searching is cheap because roll does not affect propagation, only
+    projection: the satellites are propagated once and re-projected per
+    candidate angle.
+
+    Returns:
+        The best roll in degrees, and the total score it achieved, so a caller
+        can tell a confident fit from a search that found nothing anywhere.
+    """
+    from satstreak.match import score as score_candidate
+
+    def total_for(roll: float) -> float:
+        aimed = replace(pointing, roll_deg=roll)
+        projected = [
+            Prediction(track=p.track, pixels=aimed.project_track(p.track)) for p in overhead
+        ]
+        running = 0.0
+        for streak in streaks:
+            best = 0.0
+            for prediction in projected:
+                candidate = score_candidate(streak, prediction, aimed)
+                if candidate is not None and candidate.score > best:
+                    best = candidate.score
+            running += best
+        return running
+
+    coarse = [(total_for(r), r) for r in _frange(0.0, 180.0, ROLL_COARSE_STEP_DEG)]
+    best_total, best_roll = max(coarse)
+
+    fine = [
+        (total_for(r), r)
+        for r in _frange(
+            best_roll - ROLL_COARSE_STEP_DEG, best_roll + ROLL_COARSE_STEP_DEG, ROLL_FINE_STEP_DEG
+        )
+    ]
+    fine_total, fine_roll = max(fine)
+    if fine_total >= best_total:
+        best_total, best_roll = fine_total, fine_roll
+    return best_roll % 180.0, best_total
+
+
+def _frange(start: float, stop: float, step: float) -> list[float]:
+    count = max(1, round((stop - start) / step))
+    return [start + i * step for i in range(count)]
+
+
 def scan_image(
     image: np.ndarray,
     observation: Observation,
@@ -54,6 +121,7 @@ def scan_image(
     min_altitude_deg: float = 10.0,
     detector: DetectorSettings | None = None,
     samples: int = 9,
+    search_roll: bool = False,
 ) -> IdentifyResult:
     """Find every trail in a frame and identify what made it.
 
@@ -62,6 +130,9 @@ def scan_image(
         pointing: Where the camera was aimed. Required: without it there is no
             way to relate pixels to sky, and guessing would produce confident
             nonsense.
+        search_roll: Solve for the sensor rotation rather than trusting the one
+            given. Roll is the single pointing parameter a photographer cannot
+            report, so this is on by default in the CLI.
 
     Returns:
         `ImageStatus.NO_STREAKS` when the frame was swept and held nothing, or
@@ -91,14 +162,29 @@ def scan_image(
             diagnostics=diagnostics,
         )
 
-    predictions: list[Prediction] = predict(
+    # Everything above the horizon, before any frame test, so that a roll search
+    # can re-project the same tracks without propagating again.
+    overhead: list[Prediction] = predict(
         observation,
-        pointing,
+        None,
         propagator=propagator,
         group=group,
         min_altitude_deg=min_altitude_deg,
         samples=samples,
     )
+
+    if search_roll:
+        best_roll, total = solve_roll(streaks, overhead, pointing)
+        diagnostics["roll_searched"] = True
+        diagnostics["roll_deg"] = round(best_roll, 2)
+        diagnostics["roll_search_total_score"] = round(total, 3)
+        pointing = replace(pointing, roll_deg=best_roll)
+        diagnostics["pointing"]["roll_deg"] = round(best_roll, 2)
+
+    predictions = [
+        Prediction(track=p.track, pixels=pointing.project_track(p.track)) for p in overhead
+    ]
+    predictions = [p for p in predictions if p.pixels is not None and p.pixels.crosses_frame]
     diagnostics["candidates_in_frame"] = len(predictions)
 
     findings = tuple(match_streak(s, predictions, pointing) for s in streaks)

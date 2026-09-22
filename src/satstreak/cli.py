@@ -49,7 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--exposure", type=float, default=None, help="shutter duration, seconds")
     scan.add_argument("--alt", type=float, default=None, help="frame centre altitude, degrees")
     scan.add_argument("--az", type=float, default=None, help="frame centre azimuth, degrees")
-    scan.add_argument("--roll", type=float, default=0.0, help="sensor rotation, degrees")
+    scan.add_argument(
+        "--roll",
+        default="auto",
+        help=(
+            "sensor rotation in degrees, or 'auto' (the default) to solve for it. "
+            "Roll is the one pointing value a photographer cannot report"
+        ),
+    )
     scan.add_argument("--fov", type=float, default=None, help="frame width, degrees")
     scan.add_argument("--group", default="active", help="CelesTrak group to load")
     scan.add_argument("--json", action="store_true", help="write the result as JSON")
@@ -173,17 +180,26 @@ def _scan(args) -> int:
         print(f"Could not read {args.image}: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
+    search_roll = str(args.roll).strip().lower() == "auto"
+    try:
+        roll = 0.0 if search_roll else float(args.roll)
+    except ValueError:
+        print(f"--roll must be a number or 'auto', got {args.roll!r}", file=sys.stderr)
+        return EXIT_ERROR
+
     height, width = image.shape
     pointing = Pointing(
         altitude_deg=args.alt,
         azimuth_deg=args.az,
-        roll_deg=args.roll,
+        roll_deg=roll,
         scale_arcsec_per_px=args.fov * 3600.0 / width,
         width_px=width,
         height_px=height,
     )
 
-    result = scan_image(image, observation, pointing, group=args.group)
+    result = scan_image(image, observation, pointing, group=args.group, search_roll=search_roll)
+    if search_roll and not args.json and "roll_deg" in result.diagnostics:
+        print(f"(solved sensor roll: {result.diagnostics['roll_deg']:.1f} deg)")
     print(_render(result, args.json))
     return EXIT_MATCH if result.matched else EXIT_NO_MATCH
 
