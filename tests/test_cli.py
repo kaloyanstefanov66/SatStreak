@@ -7,6 +7,8 @@ real photograph through the whole pipeline from the command line.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from satstreak.cli import EXIT_ERROR, _render, main
@@ -26,33 +28,72 @@ def test_a_missing_subcommand_is_an_error() -> None:
     assert exc.value.code != 0
 
 
-def test_scan_without_a_time_says_so(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["scan", "photo.jpg"]) == EXIT_ERROR
-    assert "--time is required" in capsys.readouterr().err
+def _bare_photo(tmp_path: Path) -> Path:
+    """A photograph with no metadata at all, as a stripped share produces."""
+    pytest.importorskip("PIL", reason="needs Pillow")
+    from PIL import Image
+
+    path = tmp_path / "bare.jpg"
+    Image.new("RGB", (400, 300)).save(path)
+    return path
 
 
-def test_scan_rejects_a_time_without_an_offset(capsys: pytest.CaptureFixture[str]) -> None:
+def _full_photo(tmp_path: Path) -> Path:
+    """A photograph carrying time, position, exposure and focal length."""
+    pytest.importorskip("PIL", reason="needs Pillow")
+    from PIL import Image
+
+    path = tmp_path / "full.jpg"
+    img = Image.new("RGB", (400, 300))
+    exif = img.getexif()
+    ifd = exif.get_ifd(0x8769)
+    ifd[0x9003] = "2026:09:21 23:14:07"
+    ifd[0x9011] = "+03:00"
+    ifd[0x829A] = 20.0
+    ifd[0xA405] = 26.0
+    gps = exif.get_ifd(0x8825)
+    gps[1], gps[2] = "N", (42.0, 41.0, 51.7)
+    gps[3], gps[4] = "E", (23.0, 19.0, 18.8)
+    img.save(path, exif=exif)
+    return path
+
+
+def test_scan_of_a_missing_file_says_so(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["scan", "no-such-photo.jpg"]) == EXIT_ERROR
+    assert "Could not read" in capsys.readouterr().err
+
+
+def test_scan_of_a_stripped_photo_names_what_it_needs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No metadata means the user has to supply it, and the message should say
+    # which flags rather than failing generically.
+    assert main(["scan", str(_bare_photo(tmp_path))]) == EXIT_ERROR
+    error = capsys.readouterr().err
+    assert "--time" in error
+    assert "--lat and --lon" in error
+
+
+def test_scan_rejects_a_time_without_an_offset(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     # A local time read as UTC rotates the sky by the observer's offset, so this
     # refuses rather than assuming.
-    code = main(
-        ["scan", "photo.jpg", "--time", "2026-09-21T23:14:07", "--lat", "42", "--lon", "23"]
-    )
+    code = main(["scan", str(_bare_photo(tmp_path)), "--time", "2026-09-21T23:14:07"])
     assert code == EXIT_ERROR
     assert "needs a UTC offset" in capsys.readouterr().err
 
 
-def test_scan_without_a_pointing_explains_what_is_missing(
-    capsys: pytest.CaptureFixture[str],
+def test_a_photo_with_metadata_only_needs_to_be_told_where_it_pointed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Plate solving would supply the aim. Until it does, the CLI says so instead
-    # of guessing a pointing and reporting confident nonsense.
-    code = main(
-        ["scan", "photo.jpg", "--time", "2026-09-21T23:14:07+03:00", "--lat", "42", "--lon", "23"]
-    )
-    assert code == EXIT_ERROR
+    # Time, position, exposure and field of view all come from the photograph.
+    # The aim is the only thing left, because plate solving does not exist yet.
+    assert main(["scan", str(_full_photo(tmp_path))]) == EXIT_ERROR
     error = capsys.readouterr().err
-    assert "--alt, --az and --fov are required" in error
-    assert "cannot yet recover the camera's aim" in error
+    assert "--alt and --az" in error
+    assert "--time" not in error
+    assert "--fov" not in error
 
 
 # --- rendering --------------------------------------------------------------

@@ -126,6 +126,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     return EXIT_ERROR
 
 
+def _report_exif(facts, args, fov: float) -> None:
+    """Say what came from the photograph, so a wrong answer can be traced."""
+    if facts.camera:
+        print(f"{facts.camera}", end="")
+        if facts.iso:
+            print(f"  ISO {facts.iso}", end="")
+        print()
+
+    read: list[str] = []
+    if facts.timestamp_utc and args.timestamp is None:
+        # Which clock the time came from matters: GPS is authoritative, while a
+        # camera clock plus a recorded offset can still be seconds out.
+        read.append(f"time {facts.timestamp_utc.isoformat()} (from {facts.timestamp_source})")
+    if facts.latitude_deg is not None and args.lat is None:
+        read.append(f"position {facts.latitude_deg:.4f}, {facts.longitude_deg:.4f}")
+    if facts.exposure_s is not None and args.exposure is None:
+        read.append(f"exposure {facts.exposure_s:g}s")
+    if facts.fov_width_deg is not None and args.fov is None:
+        read.append(f"field {facts.fov_width_deg:.0f} deg (from {facts.focal_length_35mm:g}mm)")
+    if read:
+        print("read from the photograph: " + ", ".join(read))
+    for warning in facts.warnings:
+        print(f"  note: {warning}")
+
+
 def _observation_from(args) -> Observation | None:
     """Build an Observation from the command line, or explain what is missing."""
     if not args.timestamp:
@@ -156,20 +181,57 @@ def _observation_from(args) -> Observation | None:
 
 
 def _scan(args) -> int:
+    from satstreak.exif import ExifError, observation_from, read_exif
     from satstreak.geometry import Pointing
     from satstreak.scan import load_greyscale, scan_image
 
-    observation = _observation_from(args)
-    if observation is None:
+    # The photograph usually knows when and where it was taken. Flags override
+    # it, for the cameras that record nothing or record it wrongly.
+    try:
+        facts = read_exif(args.image)
+    except ExifError as exc:
+        print(str(exc), file=sys.stderr)
         return EXIT_ERROR
 
-    if args.alt is None or args.az is None or args.fov is None:
-        # Plate solving would supply these. Until it does, saying so plainly
-        # beats guessing a pointing and reporting confident nonsense.
+    explicit_time = None
+    if args.timestamp:
+        try:
+            explicit_time = datetime.fromisoformat(args.timestamp)
+        except ValueError:
+            print(f"Could not parse --time {args.timestamp!r} as ISO 8601", file=sys.stderr)
+            return EXIT_ERROR
+        if explicit_time.tzinfo is None:
+            print("--time needs a UTC offset, e.g. 2026-09-21T23:14:07+03:00", file=sys.stderr)
+            return EXIT_ERROR
+        explicit_time = explicit_time.astimezone(timezone.utc)
+
+    try:
+        observation = observation_from(
+            facts,
+            timestamp=explicit_time,
+            latitude_deg=args.lat,
+            longitude_deg=args.lon,
+            elevation_m=args.elevation,
+            exposure_s=args.exposure,
+        )
+    except ExifError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_ERROR
+
+    # Field of view comes from the lens's 35mm-equivalent focal length when the
+    # camera recorded one, which it usually does.
+    fov = args.fov if args.fov is not None else facts.fov_width_deg
+    if args.alt is None or args.az is None or fov is None:
+        needed = []
+        if args.alt is None or args.az is None:
+            needed.append("--alt and --az (roughly where you pointed)")
+        if fov is None:
+            needed.append("--fov (the camera recorded no focal length)")
         print(
-            "--alt, --az and --fov are required: satstreak cannot yet recover the "
-            "camera's aim from the image itself. "
-            "Give roughly where you pointed, e.g. --alt 70 --az 180 --fov 70",
+            "Missing: "
+            + "; ".join(needed)
+            + ". satstreak cannot yet recover the camera's aim from the image itself, "
+            "so where you pointed has to be given.",
             file=sys.stderr,
         )
         return EXIT_ERROR
@@ -179,6 +241,9 @@ def _scan(args) -> int:
     except (OSError, RuntimeError) as exc:
         print(f"Could not read {args.image}: {exc}", file=sys.stderr)
         return EXIT_ERROR
+
+    if not args.json:
+        _report_exif(facts, args, fov)
 
     search_roll = str(args.roll).strip().lower() == "auto"
     try:
@@ -192,7 +257,7 @@ def _scan(args) -> int:
         altitude_deg=args.alt,
         azimuth_deg=args.az,
         roll_deg=roll,
-        scale_arcsec_per_px=args.fov * 3600.0 / width,
+        scale_arcsec_per_px=fov * 3600.0 / width,
         width_px=width,
         height_px=height,
     )

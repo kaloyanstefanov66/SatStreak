@@ -23,23 +23,44 @@ plainly that it could not work it out.
 Point it at a photograph, say roughly where you aimed, and it names what it finds:
 
 ```console
-$ satstreak scan night-sky.png     --time 2026-09-22T17:31:07+03:00 --lat 42.6977 --lon 23.3219     --alt 78.5 --az 273.1 --fov 50 --exposure 20
-(solved sensor roll: 23.0 deg)
-Found 5 trail(s):
-  1. STARLINK-30354 (NORAD 57772) - confidence 100%  [292px at 78 deg]
-  2. STARLINK-3995 (NORAD 52632) - confidence 100%   [344px at 31 deg]
-  3. STARLINK-3589 (NORAD 51997) - confidence 100%   [133px at 107 deg]
-  4. STARLINK-36914 (NORAD 67942) - confidence 100%  [60px at 75 deg]
-  5. STARLINK-11640 [DTC] (NORAD 63314) - confidence 39%  [959px at 77 deg]
+$ satstreak scan night-sky.jpg --alt 75 --az 285
+SyntheticCo TestPhone 1  ISO 1600
+read from the photograph: time 2026-09-22T19:24:25+00:00 (from gps),
+  position 42.6977, 23.3219, exposure 20s, field 69 deg (from 26mm)
+(solved sensor roll: 30.5 deg)
+Found 13 trail(s):
+  1. STARLINK-36661 (NORAD 67831) - confidence 94%  [275px at 79 deg]
+  2. ONEWEB-0331 (NORAD 49198) - confidence 96%     [180px at 167 deg]
+  3. EMISAT (NORAD 44078) - confidence 99%          [263px at 179 deg]
+  4. KUIPER-00505 (NORAD 68886) - confidence 95%    [234px at 25 deg]
+  ...
 ```
 
-You are not asked for the camera's rotation, because nobody knows it. SatStreak
-solves for it: above, it recovered 23.0 degrees, which was exactly right.
+**The time, place, exposure and field of view come from the photograph.** You
+only say roughly where you aimed, because that is the one thing a photograph does
+not record — and plate solving, which would recover it, is milestone 6.
 
-The fifth result is worth reading. Detection merged two overlapping trails into
-one, and the confidence fell to 39% where the others scored 100%, because the
-combined length no longer fitted any single satellite. Nothing instructs it to
-do that.
+You are not asked for the camera's rotation either, because nobody knows it.
+SatStreak solves for it: above it recovered 30.5 degrees against a true 31.
+
+### Measured accuracy, so far
+
+Against synthetic frames built from real orbits, with the roll unknown:
+
+| | |
+|---|---|
+| Precision | **100%** — of 12 trails it named, 12 were right |
+| Recall, trails at least 25px long | **70.6%** (12 of 17) |
+| Recall, every rendered trail | 40% (12 of 30) |
+
+The two recall figures differ because 13 of those 30 "trails" are one to five
+pixels long — geostationary and navigation satellites, which barely move during
+a 20 second exposure. Not detecting them is correct behaviour, not a miss: a
+three-pixel mark cannot be identified, and naming one would be a guess.
+
+**These are synthetic frames.** They carry no lens distortion, no light-pollution
+gradient, no cloud and no foreground, so real photographs will do worse. What the
+numbers establish is that the geometry and the matching are sound.
 
 
 `satstreak predict` takes a time, a place and where you aimed, and lists what
