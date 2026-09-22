@@ -124,6 +124,28 @@ by tracked DSLR astrophotography and says nothing about phones.
    milestone 5 directly and are not affected by selection bias at all. This is
    arguably the more valuable output.
 
+### Before you run it: nova is currently unusable for batches
+
+Measured on 2026-09-22, after request pacing was added so this is not
+self-inflicted throttling:
+
+- A **single** image sat in nova.astrometry.net's public queue for **over five
+  minutes without being assigned a job at all**, and produced no verdict within
+  ten minutes.
+- A batch of thirty produced **zero** verdicts in twenty-five minutes.
+
+The public service is fine for solving the occasional image by hand. It cannot
+support an evaluation corpus, which milestone 6 has to solve repeatedly. See
+decision 10 in `DECISIONS.md`: the solver becomes a swappable backend with a
+local implementation, and the choice between a local astrometry.net install and
+`tetra3` is still open.
+
+Until that exists, this spike will gather and attribute a corpus correctly but
+will report every image as having **no verdict** rather than as having failed to
+solve. That distinction is deliberate: not being able to ask is not the same as
+being told no, and counting one as the other would deflate the solve rate with
+someone else's queue depth.
+
 ### Running it
 
 ```bash
