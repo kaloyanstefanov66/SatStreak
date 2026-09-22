@@ -105,8 +105,8 @@ being answered first, before the machinery that depends on it is built.
 | 1 | Package skeleton, data model, tests, CI | done |
 | 2 | Orbit data: CelesTrak fetch with caching, propagation | done |
 | 3 | Geometry: sky-to-sensor projection, plus `satstreak predict` | done |
-| 4 | Trail detection across the whole frame | not started |
-| 5 | Matcher and calibrated confidence score | not started |
+| 4 | Trail detection across the whole frame | in progress |
+| 5 | Matcher, validated end to end against synthetic frames | done (score not yet calibrated) |
 | 6 | Real photographs: EXIF, plate-solve backend, measured accuracy | not started |
 | 7 | Windows-capable solver backend, so the CLI needs no WSL or Docker | not started |
 
