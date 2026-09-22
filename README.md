@@ -81,6 +81,7 @@ being answered first, before the machinery that depends on it is built.
 | 4 | Trail detection across the whole frame | not started |
 | 5 | Matcher and calibrated confidence score | not started |
 | 6 | Real photographs: EXIF, plate-solve backend, measured accuracy | not started |
+| 7 | Windows-capable solver backend, so the CLI needs no WSL or Docker | not started |
 
 Milestone 6 reports **two** numbers, not one. *Detection precision and recall*
 says how often a reported trail is real and how many real trails were missed;
@@ -114,6 +115,21 @@ SatStreak deliberately does not duplicate these:
 The gap is a self-contained tool that goes from an ordinary photograph to a named
 satellite with a confidence score, in one command, without being told where to
 look.
+
+## Platform support
+
+The core — catalogue, propagation, trail detection, matching — is pure Python
+and runs anywhere. Only plate solving is platform-constrained, so it is an
+optional extra rather than a core dependency:
+
+```console
+pip install satstreak                      # core, every platform
+pip install satstreak[solver-astrometry]   # local solving, Linux and macOS
+```
+
+On Windows the local solver currently needs WSL or Docker. The hosted demo
+needs nothing at all, since the solver runs server-side. A natively
+Windows-capable backend is milestone 7 — a commitment, not a maybe.
 
 ## Development
 

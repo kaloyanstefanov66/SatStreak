@@ -180,11 +180,52 @@ unbounded and set by other people's load makes that impossible, and would make
 the accuracy numbers a function of how busy a third party was that afternoon.
 
 So the solver becomes a swappable backend with a local implementation, which was
-already the intention but is now a requirement rather than a preference. The
-choice between running astrometry.net locally (Docker plus several gigabytes of
-index files, well-proven on wide fields) and `tetra3` (pure Python, much lighter,
-less proven on phone photographs) is **still open** and should be decided on a
-spike rather than on reputation.
+already the intention but is now a requirement rather than a preference.
+
+**Chosen for evaluation: the `astrometry` package on PyPI, run on Linux.** It
+calls the real Astrometry.net C library and downloads index series on demand, and
+it installs natively on `ubuntu-latest`, so the CI evaluation job needs no Docker
+layer. Development happens under WSL.
+
+Two costs are accepted rather than discovered later. The package takes a list of
+star positions, not an image, so source extraction is ours to write — which is
+arguably better, since it makes extraction a testable stage of our own pipeline
+instead of a black box. And its wheels currently stop at CPython 3.13, so the
+evaluation environment pins below the development interpreter.
+
+**This imposes nothing on end users.** The evaluation backend and the user-facing
+backend are separate concerns: what measures accuracy over a corpus is a
+development tool. Web demo users install nothing at all, since the solver runs
+server-side.
 
 The hosted service keeps one honest use: an independent check on a handful of
 images, to catch a local installation that is silently misconfigured.
+
+## 11. Windows is a supported target for the CLI, eventually
+
+The chosen evaluation backend does not run natively on Windows; it needs WSL. It
+would be easy to let that quietly become the shape of the product, so it is
+written down that it must not.
+
+Everything except plate solving — the catalogue, propagation, trail detection,
+matching, the data model — is pure Python and already runs anywhere. Only the
+solver is platform-constrained, and it is therefore an **optional extra behind an
+interface**, never a core dependency:
+
+```
+pip install satstreak                      # core, every platform
+pip install satstreak[solver-astrometry]   # local solving, Linux and macOS
+```
+
+A Windows-capable backend is a roadmap item, not a maybe. The realistic options
+are `tetra3` (pure Python, runs anywhere, but built for star-tracker fields rather
+than 70-degree phone frames) or shipping `solve-field` binaries. Which one is
+undecided; that there will be one is not.
+
+The consequence for design work happening now: the solver interface must be
+written so a second implementation can be dropped in without disturbing anything
+above it. That means the interface takes an image and returns pointing, plate
+scale and orientation, and exposes nothing specific to how any one solver works.
+Until such a backend exists, Windows CLI users need WSL, Docker or the hosted
+demo, and the README says so plainly rather than letting them find out at install
+time.
