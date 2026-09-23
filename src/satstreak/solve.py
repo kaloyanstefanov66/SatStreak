@@ -33,6 +33,21 @@ import numpy as np
 from satstreak.geometry import Pointing
 from satstreak.types import Observation
 
+#: Field widths to assume when the photograph records no focal length. A
+#: bracket this wide still costs far less than searching every plate scale:
+#: blind solving a single frame ran for minutes without returning, where a
+#: bracketed one returns in about a second. The range spans a long lens to an
+#: ultra-wide phone camera, which covers essentially every photograph a person
+#: would point at the sky.
+ASSUMED_FOV_RANGE_DEG = (12.0, 120.0)
+
+
+#: Where index files live unless told otherwise.
+def default_index_dir() -> str:
+    from pathlib import Path as _Path
+
+    return str(_Path.home() / ".cache" / "satstreak" / "astrometry")
+
 
 @dataclass(frozen=True)
 class SolveResult:
@@ -226,14 +241,20 @@ class AstrometryNetSolver:
             )
 
         height, width = image.shape
-        size_hint = None
         if fov_hint_deg:
             centre = fov_hint_deg * 3600.0 / width
             # A generous bracket: a hint that excludes the true scale is worse
             # than no hint at all, and the EXIF focal length is only nominal.
-            size_hint = astrometry.SizeHint(
-                lower_arcsec_per_pixel=centre * 0.7, upper_arcsec_per_pixel=centre * 1.4
-            )
+            lower, upper = centre * 0.7, centre * 1.4
+        else:
+            # Never search blind. Without any hint the solver tries every plate
+            # scale, which is the difference between a second and several
+            # minutes, and it is the mistake most likely to make the tool look
+            # broken rather than slow.
+            widest, narrowest = ASSUMED_FOV_RANGE_DEG[1], ASSUMED_FOV_RANGE_DEG[0]
+            lower = narrowest * 3600.0 / width
+            upper = widest * 3600.0 / width
+        size_hint = astrometry.SizeHint(lower_arcsec_per_pixel=lower, upper_arcsec_per_pixel=upper)
 
         deadline = started + self.timeout_s
 

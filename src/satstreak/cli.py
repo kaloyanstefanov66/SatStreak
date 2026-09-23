@@ -12,6 +12,7 @@ import json
 import sys
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from pathlib import Path
 
 from satstreak import __version__
 from satstreak.types import FindingStatus, IdentifyResult, ImageStatus, Observation
@@ -37,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
         "scan",
         help="sweep a photograph for satellite trails and identify what it finds",
     )
-    scan.add_argument("image", help="path to the photograph")
+    scan.add_argument("image", help="path to the photograph (a Windows path works under WSL)")
     scan.add_argument(
         "--time",
         dest="timestamp",
@@ -61,12 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--group", default="active", help="CelesTrak group to load")
     scan.add_argument(
         "--solve",
-        metavar="INDEX_DIR",
+        nargs="?",
+        const="",
         default=None,
+        metavar="INDEX_DIR",
         help=(
-            "recover the aim from the stars in the frame, using Astrometry.net index "
-            "files in this directory (downloaded on first use, ~0.36GB). Needs Linux "
-            "or WSL. With this, --alt and --az are not required"
+            "recover the aim from the stars in the frame, so --alt and --az are not "
+            "needed. Index files are downloaded once (~0.36GB) to ~/.cache/satstreak/"
+            "astrometry unless a directory is given. Needs Linux or WSL"
         ),
     )
     scan.add_argument("--json", action="store_true", help="write the result as JSON")
@@ -136,6 +139,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     return EXIT_ERROR
 
 
+def _resolve_path(given: str) -> str:
+    r"""Accept a Windows path when running under WSL.
+
+    Someone working from a Windows shell naturally types C:\Users\... , and
+    making them translate it by hand is the kind of friction that stops a tool
+    being used. The original is tried first, so nothing about ordinary Linux
+    paths changes.
+    """
+    import os
+    import re
+
+    if os.path.exists(given):
+        return given
+    match = re.match(r"^([A-Za-z]):[\\/](.*)$", given)
+    if match:
+        drive, rest = match.group(1).lower(), match.group(2).replace("\\", "/")
+        translated = f"/mnt/{drive}/{rest}"
+        if os.path.exists(translated):
+            return translated
+    return given
+
+
 def _report_exif(facts, args, fov: float) -> None:
     """Say what came from the photograph, so a wrong answer can be traced."""
     if facts.camera:
@@ -197,6 +222,7 @@ def _scan(args) -> int:
 
     # The photograph usually knows when and where it was taken. Flags override
     # it, for the cameras that record nothing or record it wrongly.
+    args.image = _resolve_path(args.image)
     try:
         facts = read_exif(args.image)
     except ExifError as exc:
@@ -233,12 +259,20 @@ def _scan(args) -> int:
     fov = args.fov if args.fov is not None else facts.fov_width_deg
 
     solver = None
-    if args.solve:
-        from satstreak.solve import AstrometryNetSolver
+    if args.solve is not None:
+        from satstreak.solve import AstrometryNetSolver, default_index_dir
 
+        index_dir = args.solve or default_index_dir()
+        Path(index_dir).mkdir(parents=True, exist_ok=True)
+        if not any(Path(index_dir).rglob("*.fits")):
+            print(
+                f"Downloading star index files to {index_dir} (~0.36GB, once only). "
+                "This takes a few minutes.",
+                file=sys.stderr,
+            )
         # Restricting scales is the difference between a verdict in seconds and
         # one that never arrives; these cover the field widths cameras produce.
-        solver = AstrometryNetSolver(args.solve, scales={16, 17, 18, 19})
+        solver = AstrometryNetSolver(index_dir, scales={14, 15, 16, 17, 18, 19})
 
     if solver is None and (args.alt is None or args.az is None):
         print(
@@ -248,10 +282,10 @@ def _scan(args) -> int:
             file=sys.stderr,
         )
         return EXIT_ERROR
-    if fov is None:
+    if fov is None and solver is None:
         print(
             "Missing: --fov. The camera recorded no focal length, so the field of "
-            "view has to be given.",
+            "view has to be given (or use --solve, which works it out).",
             file=sys.stderr,
         )
         return EXIT_ERROR
