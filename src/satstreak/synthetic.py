@@ -22,10 +22,12 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from satstreak.geometry import PixelTrack, Pointing
+from satstreak.stars import Star
 from satstreak.types import Observation
 
 
@@ -128,6 +130,8 @@ def render_frame(
     tracks: list[PixelTrack],
     *,
     star_count: int = 250,
+    real_stars: list[tuple[Star, Any]] | None = None,
+    limiting_magnitude: float = 5.5,
     background: float = 12.0,
     noise_sigma: float = 3.0,
     star_sigma: float = 1.4,
@@ -141,9 +145,18 @@ def render_frame(
         tracks: Already projected into pixel space. Tracks that do not cross the
             frame are skipped and do not appear in the truth, so a caller can
             hand over everything `predict` returned without filtering first.
-        star_count: Invented stars, scattered uniformly. They exist as distractors
-            for the detector, not for plate solving, so their positions carry no
-            astronomical meaning.
+        real_stars: Catalogue stars with their sky positions, from
+            `satstreak.stars.stars_above_horizon`. When given, these are drawn at
+            their true places and `star_count` is ignored. This is what makes a
+            generated frame plate-solvable, and therefore what lets the solver be
+            tested against a known answer.
+        limiting_magnitude: The faintest star drawn, and the one rendered just
+            above the noise. Brighter stars scale up from there and saturate, as
+            they do on a real sensor. Lowering it models a light-polluted sky.
+        star_count: Invented stars, scattered uniformly, used only when
+            `real_stars` is not given. They are distractors for the detector and
+            their positions carry no astronomical meaning, so a frame built from
+            them cannot be plate-solved.
         trail_brightness: Peak brightness of the trail's ridge above the
             background, in the same units as `noise_sigma`. The default is a
             comfortably bright trail; lowering it towards `noise_sigma` is how
@@ -156,17 +169,32 @@ def render_frame(
     height, width = pointing.height_px, pointing.width_px
     image = np.full((height, width), background, dtype=np.float32)
 
-    for _ in range(star_count):
-        # A steep brightness distribution, so a few stars dominate and most are
-        # faint, which is closer to a real field than uniform brightness.
-        amplitude = float(rng.pareto(1.8) * 25.0 + 10.0)
-        _stamp_gaussian(
-            image,
-            float(rng.uniform(0, width)),
-            float(rng.uniform(0, height)),
-            amplitude,
-            star_sigma,
-        )
+    if real_stars is not None:
+        # Real stars at their real places. Brightness follows the magnitude
+        # scale, which is logarithmic and inverted: a star five magnitudes
+        # brighter delivers a hundred times the flux, so a linear reading of
+        # magnitude would render every star identically.
+        floor = 5.0 * noise_sigma
+        for star, angles in real_stars:
+            if star.magnitude > limiting_magnitude:
+                continue
+            point = pointing.project(angles)
+            if point is None:
+                continue
+            amplitude = floor * 10.0 ** (-0.4 * (star.magnitude - limiting_magnitude))
+            _stamp_gaussian(image, point.x, point.y, min(amplitude, 255.0 - background), star_sigma)
+    else:
+        for _ in range(star_count):
+            # A steep brightness distribution, so a few stars dominate and most
+            # are faint, which is closer to a real field than uniform brightness.
+            amplitude = float(rng.pareto(1.8) * 25.0 + 10.0)
+            _stamp_gaussian(
+                image,
+                float(rng.uniform(0, width)),
+                float(rng.uniform(0, height)),
+                amplitude,
+                star_sigma,
+            )
 
     truth: list[TruthTrail] = []
     for track in tracks:

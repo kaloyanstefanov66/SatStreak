@@ -59,6 +59,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scan.add_argument("--fov", type=float, default=None, help="frame width, degrees")
     scan.add_argument("--group", default="active", help="CelesTrak group to load")
+    scan.add_argument(
+        "--solve",
+        metavar="INDEX_DIR",
+        default=None,
+        help=(
+            "recover the aim from the stars in the frame, using Astrometry.net index "
+            "files in this directory (downloaded on first use, ~0.36GB). Needs Linux "
+            "or WSL. With this, --alt and --az are not required"
+        ),
+    )
     scan.add_argument("--json", action="store_true", help="write the result as JSON")
 
     predict = sub.add_parser(
@@ -221,17 +231,27 @@ def _scan(args) -> int:
     # Field of view comes from the lens's 35mm-equivalent focal length when the
     # camera recorded one, which it usually does.
     fov = args.fov if args.fov is not None else facts.fov_width_deg
-    if args.alt is None or args.az is None or fov is None:
-        needed = []
-        if args.alt is None or args.az is None:
-            needed.append("--alt and --az (roughly where you pointed)")
-        if fov is None:
-            needed.append("--fov (the camera recorded no focal length)")
+
+    solver = None
+    if args.solve:
+        from satstreak.solve import AstrometryNetSolver
+
+        # Restricting scales is the difference between a verdict in seconds and
+        # one that never arrives; these cover the field widths cameras produce.
+        solver = AstrometryNetSolver(args.solve, scales={16, 17, 18, 19})
+
+    if solver is None and (args.alt is None or args.az is None):
         print(
-            "Missing: "
-            + "; ".join(needed)
-            + ". satstreak cannot yet recover the camera's aim from the image itself, "
-            "so where you pointed has to be given.",
+            "Missing: --alt and --az (roughly where you pointed). "
+            "Alternatively pass --solve with an index directory to recover the aim "
+            "from the stars in the frame.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    if fov is None:
+        print(
+            "Missing: --fov. The camera recorded no focal length, so the field of "
+            "view has to be given.",
             file=sys.stderr,
         )
         return EXIT_ERROR

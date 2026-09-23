@@ -23,6 +23,7 @@ from satstreak.geometry import Pointing
 from satstreak.match import match_streak
 from satstreak.predict import Prediction, predict
 from satstreak.propagate import Propagator
+from satstreak.solve import PlateSolver
 from satstreak.types import IdentifyResult, ImageStatus, Observation, Streak
 
 
@@ -114,8 +115,10 @@ def _frange(start: float, stop: float, step: float) -> list[float]:
 def scan_image(
     image: np.ndarray,
     observation: Observation,
-    pointing: Pointing,
+    pointing: Pointing | None = None,
     *,
+    solver: PlateSolver | None = None,
+    fov_hint_deg: float | None = None,
     propagator: Propagator | None = None,
     group: str = "active",
     min_altitude_deg: float = 10.0,
@@ -127,9 +130,13 @@ def scan_image(
 
     Args:
         image: Greyscale, 2-D. Use `load_greyscale` for a file on disk.
-        pointing: Where the camera was aimed. Required: without it there is no
-            way to relate pixels to sky, and guessing would produce confident
-            nonsense.
+        pointing: Where the camera was aimed. Either this or `solver` must be
+            given: without one there is no way to relate pixels to sky, and
+            guessing would produce confident nonsense.
+        solver: Recovers the pointing from the stars in the frame, removing the
+            last thing the user has to supply. When it succeeds its answer is
+            used; when it fails and no `pointing` was given, the scan stops with
+            `NO_POINTING` rather than proceeding on a guess.
         search_roll: Solve for the sensor rotation rather than trusting the one
             given. Roll is the single pointing parameter a photographer cannot
             report, so this is on by default in the CLI.
@@ -139,10 +146,39 @@ def scan_image(
         `FOUND` with one finding per detected trail. Each finding separately
         reports whether it was matched, was ambiguous, or matched nothing.
     """
-    streaks = detect_streaks(image, detector)
     settings = detector or DetectorSettings()
+    diagnostics: dict = {"detector": settings.to_dict(), "observation": observation.to_dict()}
 
-    diagnostics = {
+    if solver is not None:
+        solved = solver.solve(image, observation, fov_hint_deg=fov_hint_deg)
+        diagnostics["plate_solve"] = {
+            "attempted": True,
+            "solved": solved.solved,
+            "seconds": solved.seconds,
+            "stars_used": solved.stars_used,
+            "centre_ra_deg": solved.centre_ra_deg,
+            "centre_dec_deg": solved.centre_dec_deg,
+            "message": solved.message,
+        }
+        if solved.pointing is not None:
+            pointing = solved.pointing
+            # The solver reports orientation against north while roll here is
+            # measured against the zenith; the search below recovers the
+            # difference rather than it being derived.
+            search_roll = True
+        elif pointing is None:
+            return IdentifyResult(
+                status=ImageStatus.NO_POINTING,
+                message=("Could not work out where the camera was aimed. " + solved.message),
+                diagnostics=diagnostics,
+            )
+
+    if pointing is None:
+        raise ValueError("scan_image needs either a pointing or a solver")
+
+    streaks = detect_streaks(image, detector)
+
+    diagnostics |= {
         "pointing": {
             "altitude_deg": pointing.altitude_deg,
             "azimuth_deg": pointing.azimuth_deg,
@@ -150,8 +186,6 @@ def scan_image(
             "field_width_deg": round(pointing.field_width_deg, 2),
             "is_wide_field": pointing.is_wide_field,
         },
-        "observation": observation.to_dict(),
-        "detector": settings.to_dict(),
         "streaks_detected": len(streaks),
     }
 
@@ -199,7 +233,7 @@ def scan_image(
 def scan_file(
     path: str | Path,
     observation: Observation,
-    pointing: Pointing,
+    pointing: Pointing | None = None,
     **kwargs,
 ) -> IdentifyResult:
     """`scan_image` for a photograph on disk."""

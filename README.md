@@ -12,11 +12,11 @@ something crossed the frame while it was open. You will often not have noticed.
 made each one — by NORAD ID and name, with a confidence score — or tells you
 plainly that it could not work it out.
 
-> **Status: working, with one thing still missing.** `scan` finds trails in a
-> photograph and names the satellites that made them. What it cannot yet do is
-> work out where the camera was aimed, so you have to tell it roughly where you
-> pointed — plate solving is milestone 6. Accuracy has not been measured against
-> real photographs yet. See [Roadmap](#roadmap).
+> **Status: the whole pipeline works.** `scan` reads a photograph's metadata,
+> recovers where the camera was aimed from the stars in the frame, finds the
+> trails, and names the satellites that made them. Accuracy has been measured
+> against synthetic frames built from real orbits, **not** against real
+> photographs. Plate solving needs Linux or WSL for now. See [Roadmap](#roadmap).
 
 ## What works today
 
@@ -151,7 +151,9 @@ being answered first, before the machinery that depends on it is built.
 | 4 | Trail detection across the whole frame | done |
 | 5 | Matcher, validated end to end against synthetic frames | done (score not yet calibrated) |
 | 5b | Automatic sensor-roll solving | done |
-| 6 | Real photographs: EXIF, plate-solve backend, measured accuracy | not started |
+| 6a | EXIF: time, position, exposure and field of view from the photograph | done |
+| 6b | Plate solving: recover the aim from the stars in the frame | done (Linux/WSL) |
+| 6c | Measured accuracy on **real** photographs | not started |
 | 7 | Windows-capable solver backend, so the CLI needs no WSL or Docker | not started |
 
 Milestone 6 reports **two** numbers, not one. *Detection precision and recall*
