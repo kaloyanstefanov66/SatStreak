@@ -209,14 +209,50 @@ class AstrometryNetSolver:
         found.sort(reverse=True)
         return [[x, y] for _, x, y in found[: self.max_stars]]
 
+    def _solve_in_child(self, stars, lower, upper, queue) -> None:  # pragma: no cover
+        """Runs in a separate process so the parent can kill it on overrun."""
+        import astrometry
+
+        try:
+            solver = astrometry.Solver(
+                astrometry.series_4100.index_files(
+                    cache_directory=self.cache_directory, scales=self.scales
+                )
+            )
+            solution = solver.solve(
+                stars=stars,
+                size_hint=astrometry.SizeHint(
+                    lower_arcsec_per_pixel=lower, upper_arcsec_per_pixel=upper
+                ),
+                position_hint=None,
+                solution_parameters=astrometry.SolutionParameters(),
+            )
+            if not solution.has_match():
+                queue.put((None, None))
+                return
+            match = solution.best_match()
+            queue.put(
+                (
+                    None,
+                    {
+                        "ra": float(match.center_ra_deg),
+                        "dec": float(match.center_dec_deg),
+                        "scale": float(match.scale_arcsec_per_pixel),
+                    },
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the parent, not raised
+            queue.put((f"{type(exc).__name__}: {exc}", None))
+
     def solve(
         self, image: np.ndarray, observation: Observation, fov_hint_deg: float | None = None
     ) -> SolveResult:
+        import multiprocessing
         import time
 
         started = time.monotonic()
         try:
-            import astrometry
+            import astrometry  # noqa: F401 - availability check only
         except ImportError:
             return SolveResult(
                 pointing=None,
@@ -254,48 +290,53 @@ class AstrometryNetSolver:
             widest, narrowest = ASSUMED_FOV_RANGE_DEG[1], ASSUMED_FOV_RANGE_DEG[0]
             lower = narrowest * 3600.0 / width
             upper = widest * 3600.0 / width
-        size_hint = astrometry.SizeHint(lower_arcsec_per_pixel=lower, upper_arcsec_per_pixel=upper)
 
-        deadline = started + self.timeout_s
-
-        def stop_when_done(logodds: list[float]) -> astrometry.Action:
-            if time.monotonic() > deadline or (logodds and max(logodds) > 100.0):
-                return astrometry.Action.STOP
-            return astrometry.Action.CONTINUE
-
-        solver = astrometry.Solver(
-            astrometry.series_4100.index_files(
-                cache_directory=self.cache_directory, scales=self.scales
-            )
+        # The library exposes no timeout, and its logodds_callback is not a
+        # substitute: it is only invoked when there are log-odds to report, so a
+        # search grinding through quads without matching never notices the clock.
+        # The only bound it cannot evade is killing the process.
+        queue: multiprocessing.Queue = multiprocessing.Queue()
+        child = multiprocessing.Process(
+            target=self._solve_in_child, args=(stars, lower, upper, queue), daemon=True
         )
-        try:
-            solution = solver.solve(
-                stars=stars,
-                size_hint=size_hint,
-                position_hint=None,
-                solution_parameters=astrometry.SolutionParameters(logodds_callback=stop_when_done),
+        child.start()
+        child.join(self.timeout_s)
+        if child.is_alive():
+            child.terminate()
+            child.join(5)
+            return SolveResult(
+                pointing=None,
+                seconds=round(time.monotonic() - started, 1),
+                stars_used=len(stars),
+                message=(
+                    f"Gave up after {self.timeout_s:.0f}s. Wide or distorted fields are "
+                    "hardest, and a frame that is mostly foreground gives the solver "
+                    "terrain rather than stars."
+                ),
             )
-        finally:
-            solver.close()
+        try:
+            error, match = queue.get_nowait()
+        except Exception:  # noqa: BLE001 - child died without reporting
+            error, match = "the solver process died without a result", None
 
         elapsed = round(time.monotonic() - started, 1)
-        if not solution.has_match():
+        if match is None:
             return SolveResult(
                 pointing=None,
                 seconds=elapsed,
                 stars_used=len(stars),
                 message=(
-                    f"No match against the star catalogue, using {len(stars)} sources. "
+                    error
+                    or f"No match against the star catalogue, using {len(stars)} sources. "
                     "Wide fields are hardest: lens distortion grows away from centre and "
                     "the tangent-plane model does not account for it."
                 ),
             )
 
-        match = solution.best_match()
         pointing = equatorial_to_pointing(
-            ra_deg=float(match.center_ra_deg),
-            dec_deg=float(match.center_dec_deg),
-            scale_arcsec_per_px=float(match.scale_arcsec_per_pixel),
+            ra_deg=match["ra"],
+            dec_deg=match["dec"],
+            scale_arcsec_per_px=match["scale"],
             orientation_deg=0.0,
             observation=observation,
             width_px=width,
@@ -305,8 +346,8 @@ class AstrometryNetSolver:
             pointing=pointing,
             seconds=elapsed,
             stars_used=len(stars),
-            centre_ra_deg=float(match.center_ra_deg),
-            centre_dec_deg=float(match.center_dec_deg),
+            centre_ra_deg=match["ra"],
+            centre_dec_deg=match["dec"],
             message=f"Solved from {len(stars)} stars in {elapsed}s.",
         )
 
