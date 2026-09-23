@@ -147,6 +147,7 @@ class AstrometryNetSolver:
         scales: set[int] | None = None,
         timeout_s: float = 90.0,
         max_stars: int = 120,
+        max_source_area_px: int = 60,
     ) -> None:
         self.cache_directory = cache_directory
         # Restricting scales is the single largest speed lever: one scale returns
@@ -155,13 +156,28 @@ class AstrometryNetSolver:
         self.scales = scales
         self.timeout_s = timeout_s
         self.max_stars = max_stars
+        self.max_source_area_px = max_source_area_px
 
     def extract_stars(self, image: np.ndarray) -> list[list[float]]:
         """Star-like sources, brightest first.
 
-        Elongated detections are rejected. On these images the elongated things
-        are the satellite trails themselves, and handing a trail to the solver as
-        though it were a star corrupts the very geometry being recovered.
+        Two filters decide what counts as a star, and both matter more than they
+        look.
+
+        **Compactness.** Only point-like regions are kept. A deep exposure is
+        full of galaxies and extended objects, and on a real telescope frame they
+        dominate: ranking by summed flux there returned regions with a median
+        area of 142 pixels, where genuine stars occupy about 13. Astrometry.net
+        matches patterns of *stars*, so handing it galaxies is handing it noise.
+
+        **Ranking by peak, not total flux.** Summed flux rewards whatever is
+        largest; peak brightness rewards whatever is brightest, which is the
+        ordering the solver expects.
+
+        Elongated detections are rejected too. On these images the elongated
+        things are the satellite trails themselves, and handing a trail to the
+        solver as though it were a star corrupts the very geometry being
+        recovered.
         """
         from scipy import ndimage
 
@@ -181,7 +197,9 @@ class AstrometryNetSolver:
         for index, region in enumerate(ndimage.find_objects(labels), start=1):
             window = labels[region] == index
             area = int(window.sum())
-            if not 2 <= area <= 400:
+            # A point source spans a few pixels. The upper bound is what keeps
+            # galaxies and nebulosity out of a list meant to hold stars.
+            if not 2 <= area <= self.max_source_area_px:
                 continue
             offset_y, offset_x = region[0].start, region[1].start
             local = np.argwhere(window)
@@ -204,8 +222,9 @@ class AstrometryNetSolver:
             if major / minor > 2.5:
                 continue  # a trail, not a star
 
-            found.append((total, centre_x, centre_y))
+            found.append((float(weights.max()), centre_x, centre_y))
 
+        # Brightest peak first, which is the order Astrometry.net works down.
         found.sort(reverse=True)
         return [[x, y] for _, x, y in found[: self.max_stars]]
 
