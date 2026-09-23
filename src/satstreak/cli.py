@@ -273,18 +273,40 @@ def _scan(args) -> int:
         return EXIT_ERROR
 
     height, width = image.shape
-    pointing = Pointing(
-        altitude_deg=args.alt,
-        azimuth_deg=args.az,
-        roll_deg=roll,
-        scale_arcsec_per_px=fov * 3600.0 / width,
-        width_px=width,
-        height_px=height,
+    # Without --alt and --az there is no pointing to build; the solver supplies
+    # one instead. Building a Pointing from None would fail deep inside the
+    # geometry rather than here.
+    pointing = None
+    if args.alt is not None and args.az is not None:
+        pointing = Pointing(
+            altitude_deg=args.alt,
+            azimuth_deg=args.az,
+            roll_deg=roll,
+            scale_arcsec_per_px=fov * 3600.0 / width,
+            width_px=width,
+            height_px=height,
+        )
+
+    result = scan_image(
+        image,
+        observation,
+        pointing,
+        solver=solver,
+        fov_hint_deg=fov,
+        group=args.group,
+        search_roll=search_roll,
     )
 
-    result = scan_image(image, observation, pointing, group=args.group, search_roll=search_roll)
-    if search_roll and not args.json and "roll_deg" in result.diagnostics:
-        print(f"(solved sensor roll: {result.diagnostics['roll_deg']:.1f} deg)")
+    if not args.json:
+        solved = result.diagnostics.get("plate_solve")
+        if solved and solved.get("solved"):
+            aim = result.diagnostics["pointing"]
+            print(
+                f"(plate solved from {solved['stars_used']} stars in "
+                f"{solved['seconds']}s: alt {aim['altitude_deg']:.1f} az {aim['azimuth_deg']:.1f})"
+            )
+        if search_roll and "roll_deg" in result.diagnostics:
+            print(f"(solved sensor roll: {result.diagnostics['roll_deg']:.1f} deg)")
     print(_render(result, args.json))
     return EXIT_MATCH if result.matched else EXIT_NO_MATCH
 

@@ -214,3 +214,35 @@ def test_the_roll_search_reports_how_well_it_did(
         search_roll=True,
     )
     assert result.diagnostics["roll_search_total_score"] > 0.5
+
+
+def test_roll_is_recovered_in_the_second_half_of_a_turn(
+    propagator: Propagator, observation: Observation, pointing: Pointing
+) -> None:
+    # A trail's own angle wraps at 180 because a trail is an axis, not an arrow,
+    # which makes it tempting to search only half a turn. That is wrong: rolling
+    # the sensor by 180 degrees sends every pixel to the opposite side of the
+    # frame, so roll 200 and roll 20 place the same track in different places.
+    # Searching half a turn left every answer above 180 unreachable, and this
+    # case is the one that catches it.
+    from dataclasses import replace
+
+    from satstreak.predict import predict
+    from satstreak.synthetic import render_frame
+
+    rolled = replace(pointing, roll_deg=200.0)
+    predictions = predict(observation, rolled, propagator=propagator, samples=9)
+    frame = render_frame(
+        observation, rolled, [p.pixels for p in predictions if p.pixels is not None], seed=5
+    )
+
+    result = scan_image(
+        frame.image,
+        observation,
+        replace(rolled, roll_deg=0.0),
+        propagator=propagator,
+        search_roll=True,
+    )
+    assert result.diagnostics["roll_deg"] == pytest.approx(200.0, abs=1.0)
+    assert result.findings[0].status is FindingStatus.MATCH
+    assert result.findings[0].best.norad_id == ISS_NORAD

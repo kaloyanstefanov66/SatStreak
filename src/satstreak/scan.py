@@ -47,8 +47,11 @@ def load_greyscale(path: str | Path) -> np.ndarray:
 
 
 #: Coarse step for the roll search, in degrees, followed by a fine pass around
-#: the best coarse value. A trail's orientation wraps at 180, so the search only
-#: needs half a turn.
+#: the best coarse value. The search covers a **full** turn: a trail's own angle
+#: wraps at 180 because a trail is an axis rather than an arrow, but the sensor's
+#: orientation does not. Rolling by 180 degrees sends every pixel to the opposite
+#: side of the frame, so roll 30 and roll 210 place the same track in different
+#: places. Searching only half a turn leaves half the answers unreachable.
 ROLL_COARSE_STEP_DEG = 3.0
 ROLL_FINE_STEP_DEG = 0.25
 
@@ -92,7 +95,7 @@ def solve_roll(
             running += best
         return running
 
-    coarse = [(total_for(r), r) for r in _frange(0.0, 180.0, ROLL_COARSE_STEP_DEG)]
+    coarse = [(total_for(r), r) for r in _frange(0.0, 360.0, ROLL_COARSE_STEP_DEG)]
     best_total, best_roll = max(coarse)
 
     fine = [
@@ -104,7 +107,7 @@ def solve_roll(
     fine_total, fine_roll = max(fine)
     if fine_total >= best_total:
         best_total, best_roll = fine_total, fine_roll
-    return best_roll % 180.0, best_total
+    return best_roll % 360.0, best_total
 
 
 def _frange(start: float, stop: float, step: float) -> list[float]:

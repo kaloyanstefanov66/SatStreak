@@ -22,6 +22,27 @@ plainly that it could not work it out.
 
 Point it at a photograph, say roughly where you aimed, and it names what it finds:
 
+With plate solving (Linux or WSL), the photograph is the only argument:
+
+```console
+$ satstreak scan night-sky.jpg --solve ~/astrometry-cache
+SyntheticCo TestPhone 1  ISO 1600
+read from the photograph: time 2026-09-23T09:19:04+00:00 (from gps),
+  position 42.6977, 23.3219, exposure 20s, field 69 deg (from 26mm)
+(plate solved from 120 stars in 1.1s: alt 73.4 az 294.9)
+(solved sensor roll: 359.2 deg)
+Found 17 trail(s):
+  1. STARLINK-35022 (NORAD 65409) - confidence 89%
+  3. ambiguous: FLOCK 4H-32 98%, IRIDE-MS1-EAGLET 2-5 81%
+  5. FLOCK 4H-18 (NORAD 66721) - confidence 100%
+  ...
+```
+
+The third result is not a failure: those two satellites were flying in
+formation at the same angle, and saying so is more honest than picking one.
+
+Without a solver, tell it roughly where you aimed instead:
+
 ```console
 $ satstreak scan night-sky.jpg --alt 75 --az 285
 SyntheticCo TestPhone 1  ISO 1600
