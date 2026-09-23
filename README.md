@@ -210,6 +210,32 @@ The gap is a self-contained tool that goes from an ordinary photograph to a name
 satellite with a confidence score, in one command, without being told where to
 look.
 
+## Running it on Windows
+
+Plate solving needs Linux, so it runs inside WSL while the command stays a single
+word on the Windows side:
+
+```powershell
+satstreak scan "C:\Users\you\Downloads\night-sky.jpg" --solve
+```
+
+Windows paths are passed through as they are — SatStreak translates them. Set-up
+is once:
+
+```bash
+# inside WSL
+python3 -m venv ~/satstreak-solver
+~/satstreak-solver/bin/pip install -e "/mnt/c/path/to/SatStreak[images]" astrometry
+```
+
+```powershell
+# in Windows: put the wrapper on PATH, then point it at WSL
+copy satstreak.cmd "$env:LOCALAPPDATA\Microsoft\WindowsApps\"
+setx SATSTREAK_WSL_BIN /home/you/satstreak-solver/bin/satstreak
+```
+
+Star index files download once, about 0.36 GB, into `~/.cache/satstreak/astrometry`.
+
 ## Platform support
 
 The core — catalogue, propagation, trail detection, matching — is pure Python
